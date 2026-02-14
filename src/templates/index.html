@@ -794,21 +794,6 @@
     font-size: 13px;
   }
   .action-step:last-child { border-bottom: none; }
-  .action-step-check {
-    width: 18px;
-    height: 18px;
-    border-radius: 4px;
-    border: 2px solid var(--border);
-    flex-shrink: 0;
-    cursor: pointer;
-    margin-top: 1px;
-    transition: all 0.15s;
-  }
-  .action-step-check:hover { border-color: var(--accent); }
-  .action-step-check.checked {
-    background: var(--green);
-    border-color: var(--green);
-  }
   .action-step-icon {
     font-size: 14px;
     flex-shrink: 0;
@@ -2821,7 +2806,6 @@ function renderActionPlan(plan) {
     const icon = actionIcons[step.action] || '&#x2022;';
     const color = actionColors[step.action] || 'var(--text2)';
     html += `<div class="action-step">
-      <div class="action-step-check" onclick="this.classList.toggle('checked')"></div>
       <div class="action-step-icon" style="color:${color}">${icon}</div>
       <div>${step.description}</div>
     </div>`;
