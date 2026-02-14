@@ -113,9 +113,9 @@ class TestFixtureCalendar:
     def test_save_and_get_fixtures(self, season_db):
         sid = season_db.create_season(123, season_name="2024-2025")
         fixtures = [
-            {"team_id": 1, "team_short": "ARS", "gameweek": 25,
+            {"team_id": 1, "team_code": 3, "team_short": "ARS", "gameweek": 25,
              "fixture_count": 2, "fdr_avg": 2.5, "is_dgw": 1, "is_bgw": 0},
-            {"team_id": 2, "team_short": "CHE", "gameweek": 25,
+            {"team_id": 2, "team_code": 8, "team_short": "CHE", "gameweek": 25,
              "fixture_count": 1, "fdr_avg": 3.0, "is_dgw": 0, "is_bgw": 0},
         ]
         season_db.save_fixture_calendar(sid, fixtures)
@@ -124,6 +124,7 @@ class TestFixtureCalendar:
         ars = next(f for f in result if f["team_short"] == "ARS")
         assert ars["is_dgw"] == 1
         assert ars["fixture_count"] == 2
+        assert ars["team_code"] == 3
 
 
 class TestStrategicPlan:

@@ -106,6 +106,7 @@ class SeasonDB:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 season_id INTEGER NOT NULL REFERENCES season(id) ON DELETE CASCADE,
                 team_id INTEGER NOT NULL,
+                team_code INTEGER,
                 team_short TEXT,
                 gameweek INTEGER NOT NULL,
                 fixture_count INTEGER NOT NULL DEFAULT 1,
@@ -138,6 +139,11 @@ class SeasonDB:
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
         """)
+        # Migrate: add team_code to fixture_calendar if missing
+        try:
+            conn.execute("SELECT team_code FROM fixture_calendar LIMIT 1")
+        except sqlite3.OperationalError:
+            conn.execute("ALTER TABLE fixture_calendar ADD COLUMN team_code INTEGER")
         conn.commit()
         conn.close()
 
@@ -436,12 +442,13 @@ class SeasonDB:
         conn = self._conn()
         conn.executemany(
             """INSERT OR REPLACE INTO fixture_calendar
-               (season_id, team_id, team_short, gameweek, fixture_count,
+               (season_id, team_id, team_code, team_short, gameweek, fixture_count,
                 opponents_json, fdr_avg, is_dgw, is_bgw)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 (
-                    season_id, f["team_id"], f.get("team_short"), f["gameweek"],
+                    season_id, f["team_id"], f.get("team_code"),
+                    f.get("team_short"), f["gameweek"],
                     f.get("fixture_count", 1), f.get("opponents_json"),
                     f.get("fdr_avg"), f.get("is_dgw", 0), f.get("is_bgw", 0),
                 )

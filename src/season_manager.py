@@ -365,6 +365,7 @@ class SeasonManager:
                 "team": code_to_short.get(tc, ""),
                 "cost": player_cost,
                 "starter": pick.get("position", 12) <= 11,
+                "is_captain": pick.get("is_captain", False),
             })
 
         entry_hist = picks_data.get("entry_history", {})

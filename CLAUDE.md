@@ -333,7 +333,7 @@ Key FPL rules that affect the codebase logic:
 - **Free Hit**: Unlimited transfers for one GW. Squad reverts to pre-FH squad the following GW. **FTs are preserved** — same count as before the chip.
 - **Bench Boost**: All 15 players score (not just starting 11). One GW only.
 - **Triple Captain**: Captain scores 3× instead of 2×. One GW only.
-- **Half-season reset**: WC and FH are available once per half (GW1-19 and GW20-38). BB and TC are one-time only.
+- **Half-season reset**: All 4 chips (WC, FH, BB, TC) are available once per half (GW1-19 and GW20-38), giving 8 total chips per season. First-half chips expire at GW19 deadline and cannot be carried over.
 - **Captain**: Doubles the selected player's points. Vice-captain scores double if captain doesn't play.
 - **DGW/BGW**: Double Gameweek = team plays twice (points from both matches summed). Blank Gameweek = team doesn't play.
 
@@ -392,7 +392,7 @@ You are an FPL manager who has entrusted this app with your entire season. Every
 **1. FPL Rule Compliance**
 Does the code correctly implement every FPL rule? Trace through each rule and find the code that handles it. Look for:
 - Free transfer banking: +1 per GW, max 5, cost -4 per extra transfer
-- Chips: WC and FH preserve FTs at pre-chip count (no reset, no accrual). BB and TC are one-GW only. WC/FH available once per half (GW1-19 and GW20-38). BB/TC one-time only.
+- Chips: WC and FH preserve FTs at pre-chip count (no reset, no accrual). BB and TC are one-GW only. All 4 chips available once per half (GW1-19 and GW20-38), 8 total per season. First-half chips expire at GW19.
 - Captain: doubles points. Vice-captain activates only if captain gets 0 minutes.
 - Squad rules: 15 players, 2 GKP / 5 DEF / 5 MID / 3 FWD, max 3 from any team
 - Formation: 11 starters, 1 GKP, 3-5 DEF, 2-5 MID, 1-3 FWD

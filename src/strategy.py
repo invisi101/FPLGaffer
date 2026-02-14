@@ -522,6 +522,18 @@ class MultiWeekPlanner:
                     bonus[alert["player_id"]] = round(estimated_rise * 3.0, 2)
         return bonus
 
+    @staticmethod
+    def _squad_points_with_captain(squad_preds):
+        """Compute starting XI points with captain bonus for consistency with solver paths."""
+        if len(squad_preds) >= 11:
+            top11 = squad_preds.nlargest(11, "predicted_points")
+            pts = top11["predicted_points"].sum()
+            # Add captain bonus: best captain_score (or predicted_points) gets doubled
+            score_col = "captain_score" if "captain_score" in top11.columns and top11["captain_score"].notna().any() else "predicted_points"
+            captain_bonus = top11[score_col].max()
+            return pts + captain_bonus
+        return squad_preds["predicted_points"].sum() if not squad_preds.empty else 0
+
     def _simulate_path(
         self, plan_gws, filtered_preds, current_squad_ids,
         total_budget, free_transfers, ft_plan,
@@ -602,7 +614,7 @@ class MultiWeekPlanner:
                     else:
                         # Solver failed, keep current squad
                         squad_preds = gw_df[gw_df["player_id"].isin(squad_ids)]
-                        pts = squad_preds.nlargest(11, "predicted_points")["predicted_points"].sum() if len(squad_preds) >= 11 else 0
+                        pts = self._squad_points_with_captain(squad_preds)
                         path.append({
                             "gw": gw,
                             "transfers_in": [],
@@ -624,10 +636,7 @@ class MultiWeekPlanner:
             if use_now == 0:
                 # No transfers: keep current squad
                 squad_preds = gw_df[gw_df["player_id"].isin(squad_ids)]
-                if len(squad_preds) >= 11:
-                    pts = squad_preds.nlargest(11, "predicted_points")["predicted_points"].sum()
-                else:
-                    pts = squad_preds["predicted_points"].sum() if not squad_preds.empty else 0
+                pts = self._squad_points_with_captain(squad_preds)
 
                 path.append({
                     "gw": gw,
@@ -699,7 +708,7 @@ class MultiWeekPlanner:
                     else:
                         # Solver failed, keep current squad
                         squad_preds = gw_df[gw_df["player_id"].isin(squad_ids)]
-                        pts = squad_preds.nlargest(11, "predicted_points")["predicted_points"].sum() if len(squad_preds) >= 11 else 0
+                        pts = self._squad_points_with_captain(squad_preds)
                         path.append({
                             "gw": gw,
                             "transfers_in": [],
