@@ -652,8 +652,9 @@ class CaptainPlanner:
             if squad_preds.empty:
                 continue
 
-            # Sort by predicted points
-            squad_preds = squad_preds.sort_values("predicted_points", ascending=False)
+            # Sort by captain_score (upside-weighted) if available, else predicted_points
+            score_col = "captain_score" if "captain_score" in squad_preds.columns else "predicted_points"
+            squad_preds = squad_preds.sort_values(score_col, ascending=False)
 
             captain = squad_preds.iloc[0]
             vc = squad_preds.iloc[1] if len(squad_preds) > 1 else captain
