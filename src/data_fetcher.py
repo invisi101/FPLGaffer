@@ -156,6 +156,13 @@ def fetch_manager_history(manager_id: int) -> dict:
     return resp.json()
 
 
+def fetch_manager_transfers(manager_id: int) -> list[dict]:
+    """Fetch all transfers made by a manager this season."""
+    url = f"{FPL_API_BASE}/entry/{manager_id}/transfers/"
+    resp = _fetch_url(url)
+    return resp.json()
+
+
 def _detect_max_gw(season: str, force: bool = False) -> int:
     """Detect the latest available gameweek for a per-GW layout season."""
     cache_file = _cache_path(f"{season}_playerstats.csv")

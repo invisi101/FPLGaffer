@@ -10,6 +10,7 @@ from src.data_fetcher import (
     fetch_manager_entry,
     fetch_manager_history,
     fetch_manager_picks,
+    fetch_manager_transfers,
 )
 from src.season_db import SeasonDB
 from src.solver import scrub_nan, solve_milp_team, solve_transfer_milp
@@ -173,6 +174,14 @@ class SeasonManager:
         elements_map = self._get_elements_map(bootstrap)
         id_to_code, id_to_short, code_to_short = self._get_team_maps(bootstrap)
 
+        # Fetch all transfers and group by GW
+        log("Fetching transfer history...")
+        all_transfers = fetch_manager_transfers(manager_id)
+        transfers_by_gw = {}
+        for t in all_transfers:
+            gw = t["event"]
+            transfers_by_gw.setdefault(gw, []).append(t)
+
         # Backfill each played GW
         for i, gw_data in enumerate(gw_entries):
             gw = gw_data["event"]
@@ -219,6 +228,24 @@ class SeasonManager:
             # Extract transfers
             entry_hist = picks_data.get("entry_history", {})
 
+            # Build transfer in/out lists for this GW
+            gw_transfers = transfers_by_gw.get(gw, [])
+            t_in_list = []
+            t_out_list = []
+            for t in gw_transfers:
+                el_in = elements_map.get(t["element_in"], {})
+                el_out = elements_map.get(t["element_out"], {})
+                t_in_list.append({
+                    "player_id": t["element_in"],
+                    "web_name": el_in.get("web_name", "Unknown"),
+                    "cost": t.get("element_in_cost", 0) / 10,
+                })
+                t_out_list.append({
+                    "player_id": t["element_out"],
+                    "web_name": el_out.get("web_name", "Unknown"),
+                    "cost": t.get("element_out_cost", 0) / 10,
+                })
+
             self.db.save_gw_snapshot(
                 season_id=season_id,
                 gameweek=gw,
@@ -230,8 +257,8 @@ class SeasonManager:
                 points=gw_data.get("points"),
                 total_points=gw_data.get("total_points"),
                 overall_rank=gw_data.get("overall_rank"),
-                transfers_in_json=None,  # Not available in history
-                transfers_out_json=None,
+                transfers_in_json=json.dumps(t_in_list) if t_in_list else None,
+                transfers_out_json=json.dumps(t_out_list) if t_out_list else None,
                 captain_id=captain_id,
                 captain_name=captain_name,
                 transfers_cost=gw_data.get("event_transfers_cost", 0),
@@ -760,6 +787,25 @@ class SeasonManager:
 
         entry_hist = picks_data.get("entry_history", {})
 
+        # Fetch transfers for this GW
+        all_transfers = fetch_manager_transfers(manager_id)
+        gw_transfers = [t for t in all_transfers if t["event"] == current_event]
+        t_in_list = []
+        t_out_list = []
+        for t in gw_transfers:
+            el_in = elements_map.get(t["element_in"], {})
+            el_out = elements_map.get(t["element_out"], {})
+            t_in_list.append({
+                "player_id": t["element_in"],
+                "web_name": el_in.get("web_name", "Unknown"),
+                "cost": t.get("element_in_cost", 0) / 10,
+            })
+            t_out_list.append({
+                "player_id": t["element_out"],
+                "web_name": el_out.get("web_name", "Unknown"),
+                "cost": t.get("element_out_cost", 0) / 10,
+            })
+
         # Save snapshot
         self.db.save_gw_snapshot(
             season_id=season_id,
@@ -772,6 +818,8 @@ class SeasonManager:
             points=gw_data.get("points"),
             total_points=gw_data.get("total_points"),
             overall_rank=gw_data.get("overall_rank"),
+            transfers_in_json=json.dumps(t_in_list) if t_in_list else None,
+            transfers_out_json=json.dumps(t_out_list) if t_out_list else None,
             captain_id=captain_id,
             captain_name=captain_name,
             transfers_cost=gw_data.get("event_transfers_cost", 0),
