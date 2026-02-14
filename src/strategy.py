@@ -137,8 +137,10 @@ class ChipEvaluator:
                 if gw == pred_gws[0]:
                     squad_preds = gw_df[gw_df["player_id"].isin(current_squad_ids)]
                     if len(squad_preds) >= 15:
-                        all_15 = squad_preds.nlargest(15, "predicted_points")
-                        bench_pts = all_15.tail(4)["predicted_points"].sum()
+                        xi = MultiWeekPlanner._select_formation_xi(squad_preds)
+                        xi_ids = set(xi.index)
+                        bench = squad_preds.loc[~squad_preds.index.isin(xi_ids)]
+                        bench_pts = bench["predicted_points"].sum()
                     else:
                         bench_pts = squad_preds["predicted_points"].sum() * 0.25 if not squad_preds.empty else 0
                 else:
@@ -153,10 +155,8 @@ class ChipEvaluator:
                     else:
                         bench_pts = 0
 
-                # DGW multiplier: bench players with DGW fixtures are worth more
-                n_dgw = self._count_dgw_teams(fx_by_gw, gw)
-                dgw_boost = 1.0 + (n_dgw * 0.15)  # 15% boost per DGW team
-                values[gw] = round(bench_pts * dgw_boost, 1)
+                # DGW value is already captured in predicted_points (summed across fixtures)
+                values[gw] = round(bench_pts, 1)
             else:
                 # Heuristic: base bench value ~8 pts (calibrated to match near-term
                 # prediction averages), boosted by DGW count
@@ -187,10 +187,9 @@ class ChipEvaluator:
                 else:
                     candidates = gw_df
                 if not candidates.empty:
+                    # DGW value already captured in predicted_points (summed across fixtures)
                     best = candidates["predicted_points"].max()
-                    n_dgw = self._count_dgw_teams(fx_by_gw, gw)
-                    dgw_boost = 1.0 + (n_dgw * 0.1)
-                    values[gw] = round(best * dgw_boost, 1)
+                    values[gw] = round(best, 1)
                 else:
                     values[gw] = 0.0
             else:
@@ -284,12 +283,19 @@ class ChipEvaluator:
                 pts_cols = [c for c in combined.columns if c.startswith("pts_")]
                 combined["total_pts"] = combined[pts_cols].sum(axis=1)
 
-                # Current squad value over these GWs
-                squad_total = combined[combined["player_id"].isin(current_squad_ids)]["total_pts"]
-                if len(squad_total) >= 11:
-                    current_3gw = squad_total.nlargest(11).sum()
+                # Current squad value over these GWs (formation-constrained)
+                first_gw_preds = future_predictions[look_ahead_gws[0]]
+                squad_combined = combined[combined["player_id"].isin(current_squad_ids)].copy()
+                squad_combined = squad_combined.rename(columns={"total_pts": "predicted_points"})
+                if "position" in first_gw_preds.columns:
+                    pos_map = first_gw_preds.drop_duplicates("player_id").set_index("player_id")["position"]
+                    squad_combined["position"] = squad_combined["player_id"].map(pos_map)
+                if len(squad_combined) >= 11:
+                    xi = MultiWeekPlanner._select_formation_xi(squad_combined)
+                    current_3gw = xi["predicted_points"].sum()
                 else:
-                    current_3gw = squad_total.sum()
+                    current_3gw = squad_combined["predicted_points"].sum()
+                squad_combined = squad_combined.rename(columns={"predicted_points": "total_pts"})
 
                 # Solve best squad for the combined period
                 # Need position/cost data - merge from first GW predictions
@@ -486,10 +492,9 @@ class MultiWeekPlanner:
                 gw_chip = chip_plan.get("chip_gws", {}).get(gw)
 
             if gw_chip in ("wildcard", "freehit"):
-                # Chip GW: FT count irrelevant (full squad rebuild)
-                # FTs are preserved — chip week doesn't affect FT count
+                # Chip GW: FTs preserved + normal weekly accrual
                 current.append(0)
-                recurse(idx + 1, ft, current)
+                recurse(idx + 1, min(ft + 1, 5), current)
                 current.pop()
             else:
                 max_use = min(ft, max_per_gw)
@@ -523,16 +528,59 @@ class MultiWeekPlanner:
         return bonus
 
     @staticmethod
+    def _select_formation_xi(squad_preds):
+        """Select a formation-valid starting XI from a squad, maximizing predicted points.
+
+        Returns a DataFrame of 11 starters respecting 1 GKP, 3-5 DEF, 2-5 MID, 1-3 FWD.
+        Falls back to nlargest(11) if position data is missing.
+        """
+        if "position" not in squad_preds.columns or len(squad_preds) < 11:
+            return squad_preds.nlargest(min(11, len(squad_preds)), "predicted_points")
+
+        # Pick mandatory minimums: 1 GKP, 3 DEF, 2 MID, 1 FWD = 7
+        pos_groups = {}
+        for pos in ("GKP", "DEF", "MID", "FWD"):
+            grp = squad_preds[squad_preds["position"] == pos].nlargest(
+                {"GKP": 2, "DEF": 5, "MID": 5, "FWD": 3}.get(pos, 5),
+                "predicted_points",
+            )
+            pos_groups[pos] = grp
+
+        mins = {"GKP": 1, "DEF": 3, "MID": 2, "FWD": 1}
+        starters_idx = set()
+        for pos, n in mins.items():
+            starters_idx.update(pos_groups[pos].head(n).index)
+
+        # Fill remaining 4 spots from best available extras (respecting position maxima)
+        maxs = {"DEF": 5, "MID": 5, "FWD": 3}
+        picked = {pos: n for pos, n in mins.items()}
+        extras = []
+        for pos in ("DEF", "MID", "FWD"):
+            remaining = pos_groups[pos].iloc[mins[pos]:]
+            for idx_val in remaining.index:
+                if picked[pos] < maxs[pos]:
+                    extras.append((remaining.loc[idx_val, "predicted_points"], idx_val, pos))
+        extras.sort(reverse=True, key=lambda x: x[0])
+        for pts_val, idx_val, pos in extras:
+            if len(starters_idx) >= 11:
+                break
+            starters_idx.add(idx_val)
+            picked[pos] += 1
+
+        return squad_preds.loc[list(starters_idx)]
+
+    @staticmethod
     def _squad_points_with_captain(squad_preds):
-        """Compute starting XI points with captain bonus for consistency with solver paths."""
-        if len(squad_preds) >= 11:
-            top11 = squad_preds.nlargest(11, "predicted_points")
-            pts = top11["predicted_points"].sum()
-            # Add captain bonus: best captain_score (or predicted_points) gets doubled
-            score_col = "captain_score" if "captain_score" in top11.columns and top11["captain_score"].notna().any() else "predicted_points"
-            captain_bonus = top11[score_col].max()
-            return pts + captain_bonus
-        return squad_preds["predicted_points"].sum() if not squad_preds.empty else 0
+        """Compute starting XI points with captain bonus, respecting formation constraints."""
+        if len(squad_preds) < 11:
+            return squad_preds["predicted_points"].sum() if not squad_preds.empty else 0
+
+        top11 = MultiWeekPlanner._select_formation_xi(squad_preds)
+        pts = top11["predicted_points"].sum()
+        # Add captain bonus: best captain_score (or predicted_points) gets doubled
+        score_col = "captain_score" if "captain_score" in top11.columns and top11["captain_score"].notna().any() else "predicted_points"
+        captain_bonus = top11[score_col].max()
+        return pts + captain_bonus
 
     def _simulate_path(
         self, plan_gws, filtered_preds, current_squad_ids,
@@ -625,9 +673,10 @@ class MultiWeekPlanner:
                             "squad_ids": list(squad_ids),
                             "chip": gw_chip,
                         })
-                        # FTs preserved for chip weeks (no accrual)
+                        # FTs preserved + normal weekly accrual
                 else:
                     return None
+                ft = min(ft + 1, 5)
                 continue
 
             # Use the pre-planned FT allocation, clamped to actual available FTs

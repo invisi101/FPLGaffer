@@ -86,10 +86,13 @@ class SeasonManager:
         for event in bootstrap.get("events", []):
             if event.get("is_next"):
                 return event["id"]
-        # If no 'is_next', fall back to the one after 'is_current' (capped at 38)
+        # If no 'is_next', fall back to the one after 'is_current'
         for event in bootstrap.get("events", []):
             if event.get("is_current"):
-                return min(event["id"] + 1, 38)
+                next_id = event["id"] + 1
+                if next_id > 38:
+                    return None  # Season is over
+                return next_id
         return None
 
     def _calculate_free_transfers(self, history: dict) -> int:

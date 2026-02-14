@@ -66,8 +66,8 @@ DEFAULT_FEATURES = {
         "vs_opponent_goals_avg", "vs_opponent_xg_avg", "vs_opponent_matches",
         # Market sentiment
         "transfers_in_event", "net_transfers",
-        # FPL index stats
-        "influence",
+        # FPL index stats (per-GW delta, not cumulative)
+        "gw_influence",
         # Opponent attacking threat
         "opp_big_chances_allowed_last3",
     ],
@@ -712,8 +712,8 @@ SUB_MODEL_FEATURES = {
         "player_goals_last3", "player_assists_last3",
         "is_home", "cost", "next_gw_fixture_count",
         "player_minutes_played_last3", "starts_per_90",
-        # FPL index
-        "influence",
+        # FPL index (per-GW delta, not cumulative)
+        "gw_influence",
     ],
     "goals_conceded": [
         "opp_opponent_xg_last3", "opp_goals_conceded_last3",
