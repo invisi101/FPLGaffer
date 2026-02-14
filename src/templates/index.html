@@ -4167,7 +4167,7 @@ function closeHelp() { document.getElementById('helpOverlay').style.display = 'n
 <div id="helpOverlay" class="help-overlay" style="display:none" onclick="if(event.target===this)closeHelp()">
   <div class="help-content">
     <div class="help-header">
-      <h2>How to Use FPL Predictor</h2>
+      <h2>How to Use FPL Gaffer Brain</h2>
       <button class="help-close" onclick="closeHelp()">&times;</button>
     </div>
     <div class="help-body">
@@ -4175,7 +4175,7 @@ function closeHelp() { document.getElementById('helpOverlay').style.display = 'n
       <ol>
         <li><strong>Train Models</strong> &mdash; Click "Train Models" in the action bar. This builds XGBoost models from historical data and generates player predictions. Takes a few minutes on first run.</li>
         <li><strong>Browse Predictions</strong> &mdash; The Predictions tab shows predicted points for every player. Filter by position and sort by any column.</li>
-        <li><strong>Import Your Team</strong> &mdash; Go to My Team, enter your FPL Manager ID, and click "Load My Team" to import your actual squad.</li>
+        <li><strong>Import Your Team</strong> &mdash; Go to My Team, enter your FPL Manager ID, and click "Import Squad" to import your actual squad.</li>
         <li><strong>Season Management</strong> &mdash; Go to the Season tab, enter your Manager ID, and click "Initialize Season" to start tracking your season with weekly recommendations.</li>
       </ol>
 
@@ -4188,7 +4188,16 @@ function closeHelp() { document.getElementById('helpOverlay').style.display = 'n
       </ul>
 
       <h3>Best Team Tab</h3>
-      <p>Uses MILP optimization to pick the best possible 15-player squad from scratch within the 100.0m budget. Respects all FPL rules: 2 GKP, 5 DEF, 5 MID, 3 FWD, max 3 from any team. The result shows a pitch visualization with starters and bench.</p>
+      <p>Uses MILP optimization to pick the best possible 15-player squad from scratch within budget. Respects all FPL rules: 2 GKP, 5 DEF, 5 MID, 3 FWD, max 3 from any team. The result shows a pitch visualization with starters and bench.</p>
+
+      <h3>GW Compare Tab</h3>
+      <p>Compare your actual FPL team against the highest-scoring possible team for any past gameweek. Enter your Manager ID and a gameweek number, then click Compare to see:</p>
+      <ul>
+        <li><strong>Dual pitch view</strong> &mdash; Your actual team on the left, the hindsight-best team on the right</li>
+        <li><strong>Overlap highlighting</strong> &mdash; Players in both teams are highlighted in yellow</li>
+        <li><strong>Capture %</strong> &mdash; What percentage of the maximum possible points your team scored</li>
+        <li><strong>Bench</strong> &mdash; Bench players shown for both sides</li>
+      </ul>
 
       <h3>My Team Tab</h3>
       <p>Import your actual FPL squad to see how it compares to the optimal. Features:</p>

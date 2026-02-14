@@ -1,4 +1,4 @@
-# FPL Manager
+# FPL Gaffer Brain
 
 Autonomous Fantasy Premier League manager powered by XGBoost predictions and MILP optimization. Plans transfers, captaincy, and chip strategy across a rolling 5-gameweek horizon.
 
@@ -52,6 +52,10 @@ Sortable, searchable table of every player's predicted points. Filter by positio
 
 MILP solver builds the optimal 15-player squad within budget, with joint captain optimization. Displayed on an interactive pitch visualization.
 
+### GW Compare
+
+Pick any past gameweek and see your actual FPL team side-by-side with the highest-scoring possible team for that GW. Shows dual pitch visualization with overlap highlighting, capture percentage, and bench for both sides.
+
 ### My Team
 
 Import your FPL squad by manager ID. Dual-pitch view showing actual GW points (with captain multiplier) alongside predicted next GW points. Shows squad value, bank, and free transfers.
@@ -70,13 +74,6 @@ Track your entire FPL season from any gameweek:
 - **Transfer History** — complete log with cost, hits, and recommendation adherence
 - **Chips** — tracks usage and estimates remaining chip value
 
-### Feature Insights
-
-Feature importance charts from XGBoost models. Model training status and accuracy metrics.
-
-### Backtest
-
-Walk-forward historical accuracy testing with per-position breakdown and bootstrap confidence intervals.
 
 ---
 
