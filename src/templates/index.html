@@ -6,7 +6,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@600;800&display=swap" rel="stylesheet">
-<title>FPL Points Predictor</title>
+<title>FPL Gaffer Brain</title>
 <style>
   :root {
     --bg: #0f1117;
@@ -1087,7 +1087,7 @@
         </linearGradient>
       </defs>
     </svg>
-    <h1>FPL Points Predictor</h1>
+    <h1>FPL Gaffer Brain</h1>
     <button class="help-btn" onclick="openHelp()" title="How to use">?</button>
   </div>
   <div style="display:flex;align-items:center;gap:10px">
@@ -1163,25 +1163,25 @@
       <option value="predicted_next_3gw_points">Next 3 GW Points</option>
     </select>
     <button class="btn btn-primary" onclick="pickBestTeam()">Pick Team</button>
-    <button class="btn" id="btnLockIn" onclick="lockInTeam()" disabled>Lock In This Team</button>
   </div>
   <div class="team-summary" id="teamSummary"></div>
   <div id="squadDisplay">
-    <div class="empty-state"><h3>Pick Your Best Team</h3><p>Set a budget above and click "Pick Team" to find the optimal squad.</p><p style="color:#999;font-size:12px;margin-top:8px">"Lock In This Team" saves the model's predicted squad for the gameweek so you can compare it later in ⚖️ GW Compare against the actual best-performing team.</p></div>
+    <div class="empty-state"><h3>Pick Your Best Team</h3><p>Set a budget above and click "Pick Team" to find the optimal squad.</p></div>
   </div>
 </div>
 
 <!-- GW Compare Panel -->
 <div class="content compare-panel" id="gwComparePanel">
   <div class="compare-controls">
+    <label>Manager ID:</label>
+    <input type="number" class="budget-input" id="cmpManagerId" value="" style="width:120px">
     <label>Gameweek:</label>
-    <input type="number" class="bt-input" id="cmpGW" value="10" min="1" max="38" onchange="loadLockInInfo()">
+    <input type="number" class="bt-input" id="cmpGW" value="10" min="1" max="38">
     <button class="btn btn-primary" onclick="runGWCompare()">Compare</button>
-    <span id="cmpLockInfo" style="font-size:12px;color:var(--text2);margin-left:8px"></span>
   </div>
   <div class="compare-summary" id="cmpSummary"></div>
   <div id="cmpContent">
-    <div class="empty-state"><h3>GW Compare</h3><p>Lock in a team from the Best Team tab, then come back here to see how it performed vs the best possible team.</p></div>
+    <div class="empty-state"><h3>GW Compare</h3><p>Enter your Manager ID and a past gameweek to see your actual team vs the highest-scoring possible team.</p></div>
   </div>
 </div>
 
@@ -1264,7 +1264,6 @@
         <div class="season-chart-box"><h4>Points per GW</h4><canvas id="pointsChart" height="180"></canvas></div>
       </div>
       <div class="season-chart-row">
-        <div class="season-chart-box"><h4>Budget Evolution</h4><canvas id="budgetChart" height="180"></canvas></div>
         <div class="season-chart-box"><h4>Prediction Accuracy</h4><canvas id="accuracyChart" height="180"></canvas></div>
       </div>
     </div>
@@ -1405,7 +1404,6 @@ let sortAsc = false;
 let searchTimer = null;
 let taskRunning = false;
 let nextGW = null;
-let lastBestTeamResult = null;
 let lastActionPlanData = null;
 let lockedGWSquad = null;
 
@@ -1449,7 +1447,6 @@ function connectSSE() {
         // Reload predictions and model info
         loadPredictions();
         loadModelInfo();
-        loadGWCompareResults();
         // Reload season data if season tab is active
         if (typeof seasonOnTaskDone === 'function') seasonOnTaskDone();
       }
@@ -1687,7 +1684,8 @@ function switchTab(tab) {
   const gwCompare = document.getElementById('gwComparePanel');
   if (view === 'gwcompare') {
     gwCompare.classList.add('visible');
-    loadLockInInfo();
+    const saved = localStorage.getItem('fpl_manager_id');
+    if (saved) document.getElementById('cmpManagerId').value = saved;
   } else {
     gwCompare.classList.remove('visible');
   }
@@ -1719,11 +1717,6 @@ function pickBestTeam() {
   const budget = parseFloat(document.getElementById('budgetInput').value) || 100;
   const target = document.getElementById('targetSelect').value;
 
-  lastBestTeamResult = null;
-  const lockBtn = document.getElementById('btnLockIn');
-  lockBtn.disabled = true;
-  lockBtn.textContent = 'Lock In This Team';
-
   document.getElementById('squadDisplay').innerHTML = '<div class="empty-state"><p>Solving...</p></div>';
   document.getElementById('teamSummary').innerHTML = '';
 
@@ -1737,9 +1730,6 @@ function pickBestTeam() {
         `<div class="empty-state"><h3>No Solution</h3><p>${d.error}</p></div>`;
       return;
     }
-
-    lastBestTeamResult = d;
-    lockBtn.disabled = false;
 
     const gwLabel = nextGW ? `GW${nextGW}` : 'GW';
     const gw3Label = nextGW ? `GW${nextGW}-${nextGW+2}` : '3GW';
@@ -1816,59 +1806,12 @@ function pickBestTeam() {
   });
 }
 
-function lockInTeam() {
-  if (!lastBestTeamResult || !nextGW) return;
-  const btn = document.getElementById('btnLockIn');
-  btn.disabled = true;
-  btn.textContent = 'Locking in...';
-
-  fetch('/api/lock-in-team', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      players: lastBestTeamResult.players,
-      budget: lastBestTeamResult.budget,
-      target: lastBestTeamResult.target,
-      season: window._currentSeason,
-      gameweek: nextGW,
-    }),
-  }).then(r => r.json()).then(d => {
-    if (d.error) {
-      btn.textContent = 'Lock In This Team';
-      btn.disabled = false;
-      alert(d.error);
-    } else {
-      btn.textContent = `Locked for GW${nextGW}`;
-    }
-  }).catch(() => {
-    btn.textContent = 'Lock In This Team';
-    btn.disabled = false;
-  });
-}
-
-
 // ---------------------------------------------------------------------------
 // GW Compare
 // ---------------------------------------------------------------------------
-function loadLockInInfo() {
-  const gw = parseInt(document.getElementById('cmpGW').value) || 0;
-  const infoSpan = document.getElementById('cmpLockInfo');
-  infoSpan.textContent = '';
-
-  fetch('/api/locked-teams').then(r => r.json()).then(d => {
-    const key = `${window._currentSeason}_GW${gw}`;
-    const entry = (d.teams || {})[key];
-    if (entry) {
-      infoSpan.style.color = 'var(--green)';
-      infoSpan.textContent = `Locked: budget ${entry.budget}m, ${entry.timestamp}`;
-    } else {
-      infoSpan.style.color = 'var(--text2)';
-      infoSpan.textContent = 'No lock-in for this GW';
-    }
-  });
-}
-
 function runGWCompare() {
+  const managerId = document.getElementById('cmpManagerId').value;
+  if (!managerId) { alert('Enter a Manager ID'); return; }
   const gameweek = parseInt(document.getElementById('cmpGW').value) || 10;
 
   document.getElementById('cmpContent').innerHTML = '<div class="empty-state"><p>Running comparison...</p></div>';
@@ -1877,74 +1820,77 @@ function runGWCompare() {
   fetch('/api/gw-compare', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ season: window._currentSeason, gameweek }),
+    body: JSON.stringify({ manager_id: parseInt(managerId), gameweek }),
   }).then(r => r.json()).then(d => {
     if (d.error) {
       document.getElementById('cmpContent').innerHTML =
-        `<div class="empty-state"><h3>No Lock-In</h3><p>${d.error}</p></div>`;
+        `<div class="empty-state"><h3>Error</h3><p>${d.error}</p></div>`;
+      return;
     }
-  });
-}
-
-function loadGWCompareResults() {
-  fetch('/api/gw-compare-results').then(r => r.json()).then(d => {
-    if (d.error || !d.model_team) return;
 
     const overlapSet = new Set(d.overlap_player_ids || []);
 
     // Summary cards
     const summary = document.getElementById('cmpSummary');
     summary.innerHTML = `
-      <div class="summary-stat"><div class="label">Season</div><div class="value" style="font-size:16px;color:var(--text)">${d.season}</div></div>
       <div class="summary-stat"><div class="label">Gameweek</div><div class="value">${d.gameweek}</div></div>
-      <div class="summary-stat"><div class="label">Predicted Pts</div><div class="value model">${d.model_team.starting_predicted}</div></div>
-      <div class="summary-stat"><div class="label">Actual Pts</div><div class="value" style="color:var(--orange)">${d.model_team.starting_actual}</div></div>
-      <div class="summary-stat"><div class="label">Best Possible Pts</div><div class="value green">${d.actual_team.starting_actual}</div></div>
-      <div class="summary-stat"><div class="label">Capture %</div><div class="value" style="color:var(--yellow)">${d.model_capture_pct}%</div></div>
+      <div class="summary-stat"><div class="label">My Points</div><div class="value" style="color:var(--accent)">${d.my_team.starting_actual}</div></div>
+      <div class="summary-stat"><div class="label">Best Possible</div><div class="value green">${d.best_team.starting_actual}</div></div>
+      <div class="summary-stat"><div class="label">Capture %</div><div class="value" style="color:var(--yellow)">${d.capture_pct}%</div></div>
       <div class="summary-stat"><div class="label">Overlap</div><div class="value" style="color:var(--yellow)">${d.overlap_count}/11</div></div>
       <div class="summary-stat"><div class="label">Budget</div><div class="value" style="font-size:16px;color:var(--text2)">${d.budget}m</div></div>
     `;
 
     // Build dual pitches
-    function makeCard(p, showPred) {
+    function makeCard(p) {
       const isOverlap = overlapSet.has(p.player_id);
       const overlapClass = isOverlap ? ' overlap' : '';
       const actual = p.actual != null ? Number(p.actual).toFixed(0) : '-';
-      const pred = p.predicted_next_gw_points != null ? Number(p.predicted_next_gw_points).toFixed(1) : '';
-      const predHtml = showPred && pred ? `<div class="p-pred">pred: ${pred}</div>` : '';
+      const captainBadge = p.is_captain ? ' (C)' : p.is_vice_captain ? ' (V)' : '';
       return `<div class="pitch-card${overlapClass}">
-        <div class="p-name">${p.web_name || '?'}</div>
+        <div class="p-name">${p.web_name || '?'}${captainBadge}</div>
         <div class="p-team">${p.team || ''} &middot; ${Number(p.cost || 0).toFixed(1)}m</div>
         <div class="p-pts">${actual}</div>
-        ${predHtml}
       </div>`;
     }
 
-    function buildPitch(starters, showPred) {
+    function buildPitch(starters) {
       const fwd = starters.filter(p => p.position === 'FWD');
       const mid = starters.filter(p => p.position === 'MID');
       const def_ = starters.filter(p => p.position === 'DEF');
       const gkp = starters.filter(p => p.position === 'GKP');
       return `<div class="pitch">
         <div class="pitch-bottom-box"></div>
-        <div class="pitch-row fwd">${fwd.map(p => makeCard(p, showPred)).join('')}</div>
-        <div class="pitch-row mid">${mid.map(p => makeCard(p, showPred)).join('')}</div>
-        <div class="pitch-row def">${def_.map(p => makeCard(p, showPred)).join('')}</div>
-        <div class="pitch-row gkp">${gkp.map(p => makeCard(p, showPred)).join('')}</div>
+        <div class="pitch-row fwd">${fwd.map(p => makeCard(p)).join('')}</div>
+        <div class="pitch-row mid">${mid.map(p => makeCard(p)).join('')}</div>
+        <div class="pitch-row def">${def_.map(p => makeCard(p)).join('')}</div>
+        <div class="pitch-row gkp">${gkp.map(p => makeCard(p)).join('')}</div>
       </div>`;
+    }
+
+    function buildBench(bench) {
+      if (!bench || !bench.length) return '';
+      return `<div class="bench-area"><div class="bench-label">Bench</div><div class="bench-row">${
+        bench.map(p => makeCard(p)).join('')
+      }</div></div>`;
     }
 
     const container = document.getElementById('cmpContent');
     container.innerHTML = `<div class="compare-pitches">
       <div class="compare-side">
-        <h3 style="color:var(--accent)">Locked-In Team (${d.model_team.starting_actual} actual pts)</h3>
-        ${buildPitch(d.model_team.starters, true)}
+        <h3 style="color:var(--accent)">My Team (${d.my_team.starting_actual} pts)</h3>
+        ${buildPitch(d.my_team.starters)}
+        ${buildBench(d.my_team.bench)}
       </div>
       <div class="compare-side">
-        <h3 style="color:var(--green)">Best Possible (${d.actual_team.starting_actual} pts)</h3>
-        ${buildPitch(d.actual_team.starters, false)}
+        <h3 style="color:var(--green)">Best Possible (${d.best_team.starting_actual} pts)</h3>
+        ${buildPitch(d.best_team.starters)}
+        ${buildBench(d.best_team.bench)}
       </div>
     </div>`;
+  }).catch(err => {
+    document.getElementById('cmpContent').innerHTML =
+      `<div class="empty-state"><h3>Error</h3><p>${err.message}</p></div>`;
   });
 }
 
@@ -2459,9 +2405,6 @@ function renderSeasonOverview(data) {
   });
   drawBarChart('pointsChart', data.points_per_gw || [], 'gameweek', 'points', {
     color: '#2dd4a0', label: 'Points'
-  });
-  drawLineChart('budgetChart', data.budget_history || [], 'gameweek', 'total_value', {
-    color: '#fbbf24', label: 'Total Value', decimals: 1
   });
   drawDualLineChart('accuracyChart', data.accuracy_history || [], 'gameweek',
     'predicted_points', 'actual_points', {
@@ -3525,21 +3468,26 @@ function renderTransferHistory(history) {
   }
 
   let html = '<div class="bt-table-wrap"><table class="bt-table"><thead><tr>';
-  html += '<th>GW</th><th>Cost</th><th>Chip</th><th>Followed?</th><th>Point Impact</th>';
+  html += '<th>GW</th><th>Out</th><th>In</th><th>Cost</th><th>Chip</th>';
   html += '</tr></thead><tbody>';
 
   history.forEach(h => {
     const cost = h.transfers_cost || 0;
     const chip = h.chip_used || '-';
-    const followed = h.followed_transfers != null ? (h.followed_transfers ? 'Yes' : 'No') : '-';
-    const delta = h.point_delta != null ? (h.point_delta >= 0 ? '+' + h.point_delta.toFixed(1) : h.point_delta.toFixed(1)) : '-';
-    const deltaClass = h.point_delta > 0 ? 'bt-good' : h.point_delta < 0 ? 'bt-bad' : '';
+    let outsHtml = '-';
+    let insHtml = '-';
+    try {
+      const outs = JSON.parse(h.transfers_out_json || '[]');
+      const ins = JSON.parse(h.transfers_in_json || '[]');
+      if (outs.length) outsHtml = outs.map(p => `<span style="color:var(--red)">${p.web_name}</span>`).join(', ');
+      if (ins.length) insHtml = ins.map(p => `<span style="color:var(--green)">${p.web_name}</span>`).join(', ');
+    } catch(e) {}
     html += `<tr>
       <td>GW${h.gameweek}</td>
+      <td>${outsHtml}</td>
+      <td>${insHtml}</td>
       <td>${cost > 0 ? '-' + cost + 'pts' : 'Free'}</td>
       <td>${chip}</td>
-      <td>${followed}</td>
-      <td class="${deltaClass}">${delta}</td>
     </tr>`;
   });
 

@@ -67,7 +67,6 @@ _sse_queues_lock = threading.Lock()
 # Cached data/features so we don't rebuild every request
 _pipeline_cache: dict = {}
 _backtest_results: dict | None = None
-_gw_compare_results: dict | None = None
 
 
 def _broadcast(msg: str, event: str = "progress"):
@@ -619,60 +618,6 @@ def api_best_team():
     })
 
 
-@app.route("/api/lock-in-team", methods=["POST"])
-def api_lock_in_team():
-    """Lock in the current best-team recommendation for later comparison."""
-    body = request.get_json(silent=True) or {}
-    players = body.get("players")
-    if not players or not isinstance(players, list):
-        return jsonify({"error": "players list is required."}), 400
-    try:
-        budget = float(body.get("budget", 100.0))
-        gameweek = int(body.get("gameweek"))
-    except (TypeError, ValueError):
-        return jsonify({"error": "budget and gameweek are required."}), 400
-    from src.data_fetcher import detect_current_season
-    season = body.get("season", detect_current_season())
-    target = body.get("target", "predicted_next_gw_points")
-
-    key = f"{season}_GW{gameweek}"
-    locked_path = OUTPUT_DIR / "locked_teams.json"
-    if locked_path.exists():
-        locked = json.loads(locked_path.read_text(encoding="utf-8"))
-    else:
-        locked = {}
-
-    locked[key] = {
-        "season": season,
-        "gameweek": gameweek,
-        "budget": budget,
-        "target": target,
-        "timestamp": datetime.now().isoformat(timespec="seconds"),
-        "players": players,
-    }
-
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    locked_path.write_text(json.dumps(locked, indent=2, ensure_ascii=False), encoding="utf-8")
-    return jsonify({"status": "ok", "key": key})
-
-
-@app.route("/api/locked-teams")
-def api_locked_teams():
-    """Return metadata for all locked teams."""
-    locked_path = OUTPUT_DIR / "locked_teams.json"
-    if not locked_path.exists():
-        return jsonify({"teams": {}})
-    locked = json.loads(locked_path.read_text(encoding="utf-8"))
-    # Return metadata only (not full player lists)
-    meta = {}
-    for key, entry in locked.items():
-        meta[key] = {
-            "season": entry.get("season"),
-            "gameweek": entry.get("gameweek"),
-            "budget": entry.get("budget"),
-            "timestamp": entry.get("timestamp"),
-        }
-    return jsonify({"teams": meta})
 
 
 @app.route("/api/backtest", methods=["POST"])
@@ -728,129 +673,121 @@ def api_backtest_results():
 
 @app.route("/api/gw-compare", methods=["POST"])
 def api_gw_compare():
-    """Compare a locked-in team against the hindsight-best team for that GW."""
-    global _gw_compare_results
-
+    """Compare a manager's actual FPL team against the hindsight-best team for a GW."""
     body = request.get_json(silent=True) or {}
-    from src.data_fetcher import detect_current_season
-    season = body.get("season", detect_current_season())
     try:
+        manager_id = int(body.get("manager_id", 0))
         gameweek = int(body.get("gameweek", 10))
     except (TypeError, ValueError):
-        return jsonify({"error": "gameweek must be an integer."}), 400
+        return jsonify({"error": "manager_id and gameweek must be integers."}), 400
+    if not manager_id:
+        return jsonify({"error": "manager_id is required."}), 400
     if not (1 <= gameweek <= 38):
         return jsonify({"error": "gameweek must be between 1 and 38."}), 400
 
-    # Load locked team
-    locked_path = OUTPUT_DIR / "locked_teams.json"
-    key = f"{season}_GW{gameweek}"
-    if not locked_path.exists():
-        return jsonify({"error": f"You didn't lock in a team for GW{gameweek}."}), 404
-    locked = json.loads(locked_path.read_text(encoding="utf-8"))
-    if key not in locked:
-        return jsonify({"error": f"You didn't lock in a team for GW{gameweek}."}), 404
+    # Fetch manager's actual picks for this GW
+    try:
+        picks_data = fetch_manager_picks(manager_id, gameweek)
+    except Exception as exc:
+        return jsonify({"error": f"Could not fetch picks for GW{gameweek}: {exc}"}), 404
 
-    locked_entry = locked[key]
-    locked_budget = locked_entry["budget"]
-    locked_players = locked_entry["players"]
+    # Bootstrap for player info
+    bootstrap_path = CACHE_DIR / "fpl_api_bootstrap.json"
+    if not bootstrap_path.exists():
+        return jsonify({"error": "No cached bootstrap data. Click 'Get Latest Data' first."}), 400
+    bootstrap = json.loads(bootstrap_path.read_text(encoding="utf-8"))
+    elements_map = {el["id"]: el for el in bootstrap.get("elements", [])}
+    team_id_to_code = {t["id"]: t["code"] for t in bootstrap.get("teams", [])}
 
-    def do_compare():
-        global _gw_compare_results
-        _ensure_pipeline_data()
-        df = _pipeline_cache["df"]
+    from src.data_fetcher import detect_current_season
+    season = body.get("season", detect_current_season())
+    team_map = _get_team_map(season)
 
-        print(f"Running GW compare: {season} GW{gameweek} (locked team, budget={locked_budget})...")
+    # Build feature matrix
+    _ensure_pipeline_data()
+    df = _pipeline_cache["df"]
+    season_gw = df[(df["season"] == season) & (df["gameweek"] == gameweek)]
+    if season_gw.empty:
+        return jsonify({"error": f"No data for {season} GW{gameweek} in feature matrix."}), 404
 
-        # Look up actual points from the feature matrix
-        season_gw = df[(df["season"] == season) & (df["gameweek"] == gameweek)]
-        if season_gw.empty:
-            _gw_compare_results = {"error": f"No data for {season} GW{gameweek} in feature matrix."}
-            return
+    actuals = season_gw[["player_id", "event_points"]].drop_duplicates("player_id", keep="first")
+    actuals_map = dict(zip(actuals["player_id"], actuals["event_points"]))
 
-        actuals = season_gw[["player_id", "event_points"]].drop_duplicates("player_id", keep="first")
-        actuals_map = dict(zip(actuals["player_id"], actuals["event_points"]))
+    # Enrich manager's picks
+    picks = picks_data.get("picks", [])
+    entry_history = picks_data.get("entry_history", {})
+    budget = entry_history.get("value", 0) / 10  # tenths -> millions
 
-        # Annotate locked players with actual points
-        for p in locked_players:
-            p["actual"] = actuals_map.get(p.get("player_id"), None)
+    my_squad = []
+    for pick in picks:
+        eid = pick.get("element")
+        el = elements_map.get(eid, {})
+        team_id = el.get("team")
+        tc = team_id_to_code.get(team_id)
+        my_squad.append({
+            "player_id": eid,
+            "web_name": el.get("web_name", "Unknown"),
+            "position": ELEMENT_TYPE_MAP.get(el.get("element_type"), ""),
+            "team_code": tc,
+            "team": team_map.get(tc, ""),
+            "cost": el.get("now_cost", 0) / 10,
+            "actual": actuals_map.get(eid, 0),
+            "multiplier": pick.get("multiplier", 1),
+            "starter": pick.get("position", 12) <= 11,
+            "is_captain": pick.get("is_captain", False),
+            "is_vice_captain": pick.get("is_vice_captain", False),
+        })
 
-        locked_starters = [p for p in locked_players if p.get("starter")]
-        locked_bench = [p for p in locked_players if not p.get("starter")]
+    my_starters = [p for p in my_squad if p["starter"]]
+    my_bench = [p for p in my_squad if not p["starter"]]
+    # Captain/VC get multiplier applied to actual points
+    my_starting_actual = round(
+        sum((p["actual"] or 0) * p["multiplier"] for p in my_starters), 1,
+    )
 
-        starting_predicted = round(
-            sum(p.get("predicted_next_gw_points", 0) or 0 for p in locked_starters), 2,
-        )
-        starting_actual = round(
-            sum(p.get("actual", 0) or 0 for p in locked_starters), 1,
-        )
+    # Build pool for hindsight-best
+    pool_df = season_gw.copy()
+    pool_df = pool_df.drop(columns=["position"], errors="ignore")
+    pool_df = pool_df.rename(columns={"position_clean": "position", "event_points": "actual"})
+    if "team_code" in pool_df.columns:
+        pool_df["team"] = pool_df["team_code"].map(team_map).fillna("")
+    keep_cols = ["player_id", "web_name", "position", "team_code", "team", "cost", "actual"]
+    keep_cols = [c for c in keep_cols if c in pool_df.columns]
+    pool_df = pool_df[keep_cols].drop_duplicates("player_id", keep="first")
 
-        # Build player pool for hindsight-best team from the feature matrix
-        pool_df = season_gw.copy()
-        pool_df = pool_df.drop(columns=["position"], errors="ignore")
-        pool_df = pool_df.rename(columns={"position_clean": "position", "event_points": "actual"})
-        # cost is already in millions in the feature matrix
+    best_result = _solve_milp_team(pool_df, "actual", budget=budget)
+    if best_result is None:
+        return jsonify({"error": "Could not solve hindsight-best team."}), 500
 
-        team_map = _get_team_map(season)
-        if "team_code" in pool_df.columns:
-            pool_df["team"] = pool_df["team_code"].map(team_map).fillna("")
+    best_starting_actual = round(
+        sum(p.get("actual", 0) or 0 for p in best_result["starters"]), 1,
+    )
 
-        # Keep only relevant columns and deduplicate
-        keep_cols = ["player_id", "web_name", "position", "team_code", "team", "cost", "actual"]
-        keep_cols = [c for c in keep_cols if c in pool_df.columns]
-        pool_df = pool_df[keep_cols].drop_duplicates("player_id", keep="first")
+    # Overlap between manager starters and best starters
+    my_ids = {p["player_id"] for p in my_starters}
+    best_ids = {p["player_id"] for p in best_result["starters"]}
+    overlap_ids = sorted(my_ids & best_ids)
+    capture_pct = round(
+        (my_starting_actual / best_starting_actual) * 100, 1,
+    ) if best_starting_actual > 0 else 0
 
-        print("  Solving hindsight-best team (same budget)...")
-        actual_result = _solve_milp_team(pool_df, "actual", budget=locked_budget)
-        if actual_result is None:
-            _gw_compare_results = {"error": "Could not solve hindsight-best team."}
-            return
-
-        # Compute overlap between locked starters and best-possible starters
-        locked_ids = {p["player_id"] for p in locked_starters}
-        actual_ids = {p["player_id"] for p in actual_result["starters"]}
-        overlap_ids = sorted(locked_ids & actual_ids)
-
-        actual_starters_actual = sum(
-            p.get("actual", 0) or 0 for p in actual_result["starters"]
-        )
-        capture_pct = round(
-            (starting_actual / actual_starters_actual) * 100, 1,
-        ) if actual_starters_actual > 0 else 0
-
-        _gw_compare_results = {
-            "season": season,
-            "gameweek": gameweek,
-            "budget": locked_budget,
-            "model_team": {
-                "starters": _scrub_nan([dict(p) for p in locked_starters]),
-                "bench": _scrub_nan([dict(p) for p in locked_bench]),
-                "total_cost": round(sum(p.get("cost", 0) or 0 for p in locked_players), 1),
-                "starting_predicted": starting_predicted,
-                "starting_actual": starting_actual,
-            },
-            "actual_team": {
-                "starters": actual_result["starters"],
-                "bench": actual_result["bench"],
-                "total_cost": actual_result["total_cost"],
-                "starting_actual": round(actual_starters_actual, 1),
-            },
-            "overlap_player_ids": overlap_ids,
-            "overlap_count": len(overlap_ids),
-            "model_capture_pct": capture_pct,
-        }
-        print(f"  Done. Overlap: {len(overlap_ids)}/11, Capture: {capture_pct}%")
-
-    started = _run_in_background("GW Compare", do_compare)
-    if not started:
-        return jsonify({"error": "Another task is already running."}), 409
-    return jsonify({"status": "started"})
-
-
-@app.route("/api/gw-compare-results")
-def api_gw_compare_results():
-    if _gw_compare_results is None:
-        return jsonify({"error": "No GW compare results. Run a compare first."}), 404
-    return jsonify(_gw_compare_results)
+    return jsonify({
+        "gameweek": gameweek,
+        "budget": budget,
+        "my_team": {
+            "starters": _scrub_nan(my_starters),
+            "bench": _scrub_nan(my_bench),
+            "starting_actual": my_starting_actual,
+        },
+        "best_team": {
+            "starters": best_result["starters"],
+            "bench": best_result["bench"],
+            "starting_actual": best_starting_actual,
+        },
+        "overlap_player_ids": overlap_ids,
+        "overlap_count": len(overlap_ids),
+        "capture_pct": capture_pct,
+    })
 
 
 def _calculate_free_transfers(history: dict) -> int:
