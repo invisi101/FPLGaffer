@@ -302,9 +302,10 @@ def api_refresh_data():
     def do_refresh():
         data = load_all_data(force=True)
         df = build_features(data)
-        _pipeline_cache["data"] = data
-        _pipeline_cache["df"] = df
-        _pipeline_cache["feature_cols"] = get_feature_columns(df)
+        with _pipeline_lock:
+            _pipeline_cache["data"] = data
+            _pipeline_cache["df"] = df
+            _pipeline_cache["feature_cols"] = get_feature_columns(df)
 
         # Re-run predictions if 1-GW models exist
         models_exist = all(
@@ -718,7 +719,9 @@ def api_gw_compare():
     # Enrich manager's picks
     picks = picks_data.get("picks", [])
     entry_history = picks_data.get("entry_history", {})
-    budget = entry_history.get("value", 0) / 10  # tenths -> millions
+    budget_value = entry_history.get("value", 0) / 10
+    budget_bank = entry_history.get("bank", 0) / 10
+    budget = round(budget_value + budget_bank, 1)
 
     my_squad = []
     for pick in picks:
@@ -798,7 +801,7 @@ def _calculate_free_transfers(history: dict) -> int:
 
     Walks through history["current"] (one entry per GW played).
     Each GW entry has event_transfers and event_transfers_cost.
-    WC/FH preserve FTs (chip transfers don't consume FTs) but +1 accrual still happens.
+    WC/FH preserve FTs at pre-chip count (no accrual, no consumption).
     """
     current = history.get("current", [])
     chips = history.get("chips", [])
@@ -810,9 +813,7 @@ def _calculate_free_transfers(history: dict) -> int:
         event = gw_entry.get("event")
 
         if event in chip_events:
-            # WC/FH: FTs preserved — chip transfers don't consume FTs
-            # but normal +1 FT accrual still happens
-            ft = min(ft + 1, 5)
+            # WC/FH: FTs preserved at pre-chip count, no accrual
             continue
 
         transfers_made = gw_entry.get("event_transfers", 0)
@@ -1127,6 +1128,13 @@ def api_transfer_recommendations():
     current_xi_points = round(
         sum(pred_map.get(p["player_id"], {}).get(target, 0) or 0 for p in current_starters), 2
     )
+
+    # Add captain bonus (captain doubles points)
+    for pick in picks:
+        if pick.get("is_captain"):
+            cap_pred = pred_map.get(pick["element"], {}).get(target, 0) or 0
+            current_xi_points = round(current_xi_points + cap_pred, 2)
+            break
 
     # --- Solve ---
     captain_col_arg = "captain_score" if "captain_score" in pool.columns else None
@@ -1709,11 +1717,8 @@ def api_preseason_generate():
     except (TypeError, ValueError):
         return jsonify({"error": "manager_id must be an integer."}), 400
 
-    _preseason_result = {}
-
     def do_preseason():
-        nonlocal _preseason_result
-        _preseason_result = _season_mgr.generate_preseason_plan(
+        _season_mgr.generate_preseason_plan(
             manager_id, progress_fn=print,
         )
 

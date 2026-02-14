@@ -703,18 +703,26 @@ def _build_decomposed_targets(
                 pms_cs = pms[["player_id", "match_id", "gameweek", "minutes_played"]].copy()
                 pms_cs["team_code"] = pms_cs["player_id"].map(pid_to_team)
                 pms_cs = pms_cs.merge(match_gc, on=["match_id", "team_code"], how="left")
-                pms_cs["team_goals_conceded"] = pms_cs["team_goals_conceded"].fillna(0)
+                # Don't fillna(0) — unknown goals_conceded (e.g. transferred
+                # players with wrong team_code) should NOT count as a clean
+                # sheet.  NaN propagates: (NaN == 0) is False so _match_cs = 0
+                # for those rows.  The gw_goals_conceded sum uses min_count=1
+                # so all-NaN groups produce NaN targets that the model skips.
                 pms_cs["_match_cs"] = (
                     (pms_cs["team_goals_conceded"] == 0)
                     & (pms_cs["minutes_played"] >= 60)
                 ).astype(int)
-                cs_agg = pms_cs.groupby(["player_id", "gameweek"]).agg(
-                    gw_cs=("_match_cs", "sum"),
-                    gw_goals_conceded=("team_goals_conceded", "sum"),
-                ).reset_index()
+                cs_grp = pms_cs.groupby(["player_id", "gameweek"])
+                cs_agg = pd.DataFrame({
+                    "gw_cs": cs_grp["_match_cs"].sum(),
+                    # min_count=1: if ALL values are NaN (transferred player
+                    # with wrong team_code), result is NaN instead of 0
+                    "gw_goals_conceded": cs_grp["team_goals_conceded"].sum(min_count=1),
+                }).reset_index()
                 pms_agg = pms_agg.merge(cs_agg, on=["player_id", "gameweek"], how="left")
                 pms_agg["gw_cs"] = pms_agg["gw_cs"].fillna(0).astype(int)
-                pms_agg["gw_goals_conceded"] = pms_agg["gw_goals_conceded"].fillna(0)
+                # Don't fillna(0) for gw_goals_conceded — NaN means unknown
+                # (transferred player), which should produce NaN targets
     else:
         pms_agg = pd.DataFrame(columns=["player_id", "gameweek"])
 
@@ -751,7 +759,12 @@ def _build_decomposed_targets(
 
     pms_agg = all_player_gws.merge(pms_agg, on=["player_id", "gameweek"], how="left")
     gw_cols = [c for c in pms_agg.columns if c.startswith("gw_")]
-    for col in gw_cols:
+    # Fill most gw_ columns with 0 for non-starters (they scored 0 goals,
+    # 0 assists, 0 minutes etc.).  But gw_goals_conceded should stay NaN
+    # for non-starters and transferred players — 0 would be incorrectly
+    # interpreted as a clean sheet match by downstream targets.
+    gw_fill_cols = [c for c in gw_cols if c != "gw_goals_conceded"]
+    for col in gw_fill_cols:
         pms_agg[col] = pms_agg[col].fillna(0)
 
     pms_agg = pms_agg.sort_values(["player_id", "gameweek"])
@@ -962,8 +975,12 @@ def build_features(data: dict) -> pd.DataFrame:
             own_team_rolling = pd.DataFrame(columns=["team_code", "gameweek"])
 
         # 3b. Rest days / fixture congestion
-        if not finished_matches.empty:
-            rest_days = _build_rest_days_features(finished_matches)
+        # Use ALL matches (including upcoming scheduled) so that rest days
+        # and congestion data is available at prediction time, not just for
+        # finished matches.  _build_rest_days_features uses kickoff_time
+        # which is known for upcoming fixtures too.
+        if not matches.empty:
+            rest_days = _build_rest_days_features(matches)
         else:
             rest_days = pd.DataFrame(columns=["team_code", "gameweek"])
 
@@ -1077,6 +1094,20 @@ def build_features(data: dict) -> pd.DataFrame:
 
             # Merge DGW fixture count
             df = df.merge(fixture_counts, on=["team_code", "gameweek"], how="left")
+            # Distinguish BGW (0 fixtures) from unknown data outside fixture
+            # range.  If the next GW is within the known fixture range but
+            # has no entry for a team, that team has a BGW (0 fixtures).
+            # Only use fillna(1) for truly unknown data outside the range.
+            if not fixture_map.empty:
+                known_gws = set(fixture_map["gameweek"].unique())
+                if known_gws:
+                    max_known_gw = max(known_gws)
+                    # df["gameweek"] is the feature row GW N; next GW is N+1
+                    bgw_mask = (
+                        df["next_gw_fixture_count"].isna()
+                        & (df["gameweek"] + 1 <= max_known_gw)
+                    )
+                    df.loc[bgw_mask, "next_gw_fixture_count"] = 0
             df["next_gw_fixture_count"] = df["next_gw_fixture_count"].fillna(1).astype(int)
 
         # Add player rolling features

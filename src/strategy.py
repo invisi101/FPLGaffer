@@ -50,6 +50,14 @@ class ChipEvaluator:
         if not all_gws:
             all_gws = pred_gws
 
+        # Filter to current half-season only (chips expire at half boundary)
+        if all_gws:
+            first_gw = min(all_gws)
+            if first_gw <= 19:
+                all_gws = [gw for gw in all_gws if gw <= 19]
+            else:
+                all_gws = [gw for gw in all_gws if gw >= 20]
+
         # Build squad team mapping for heuristic evaluation
         # (we need to know which teams are in the current squad for BB/TC heuristics)
 
@@ -188,7 +196,8 @@ class ChipEvaluator:
                     candidates = gw_df
                 if not candidates.empty:
                     # DGW value already captured in predicted_points (summed across fixtures)
-                    best = candidates["predicted_points"].max()
+                    score_col = "captain_score" if "captain_score" in candidates.columns else "predicted_points"
+                    best = candidates[score_col].max()
                     values[gw] = round(best, 1)
                 else:
                     values[gw] = 0.0
@@ -343,6 +352,9 @@ class ChipEvaluator:
                 # Look for BB opportunities 1-3 GWs after WC
                 for bb_offset in range(1, 4):
                     bb_gw = wc_gw + bb_offset
+                    # Reject synergies crossing half-season boundary
+                    if (wc_gw <= 19) != (bb_gw <= 19):
+                        continue
                     if bb_gw in bb_vals:
                         bb_val = bb_vals[bb_gw]
                         # WC→BB synergy: WC can build a BB-optimized squad
@@ -366,6 +378,9 @@ class ChipEvaluator:
                     if wc_offset == 0:
                         continue
                     wc_gw = fh_gw + wc_offset
+                    # Reject synergies crossing half-season boundary
+                    if (fh_gw <= 19) != (wc_gw <= 19):
+                        continue
                     if wc_gw in wc_vals:
                         wc_val = wc_vals[wc_gw]
                         combined = fh_val + wc_val
@@ -492,9 +507,9 @@ class MultiWeekPlanner:
                 gw_chip = chip_plan.get("chip_gws", {}).get(gw)
 
             if gw_chip in ("wildcard", "freehit"):
-                # Chip GW: FTs preserved + normal weekly accrual
+                # Chip GW: FTs preserved at pre-chip count, no accrual
                 current.append(0)
-                recurse(idx + 1, min(ft + 1, 5), current)
+                recurse(idx + 1, ft, current)
                 current.pop()
             else:
                 max_use = min(ft, max_per_gw)
@@ -577,9 +592,8 @@ class MultiWeekPlanner:
 
         top11 = MultiWeekPlanner._select_formation_xi(squad_preds)
         pts = top11["predicted_points"].sum()
-        # Add captain bonus: best captain_score (or predicted_points) gets doubled
-        score_col = "captain_score" if "captain_score" in top11.columns and top11["captain_score"].notna().any() else "predicted_points"
-        captain_bonus = top11[score_col].max()
+        # Add captain bonus: best predicted_points gets doubled (matches MILP solver)
+        captain_bonus = top11["predicted_points"].max()
         return pts + captain_bonus
 
     def _simulate_path(
@@ -673,10 +687,9 @@ class MultiWeekPlanner:
                             "squad_ids": list(squad_ids),
                             "chip": gw_chip,
                         })
-                        # FTs preserved + normal weekly accrual
+                        # FTs preserved at pre-chip count, no accrual
                 else:
                     return None
-                ft = min(ft + 1, 5)
                 continue
 
             # Use the pre-planned FT allocation, clamped to actual available FTs
@@ -907,6 +920,7 @@ class PlanSynthesizer:
                 entry["ft_available"] = transfer_step.get("ft_available", 0)
                 entry["transfer_rationale"] = transfer_step.get("rationale", "")
                 entry["predicted_points"] = transfer_step.get("predicted_points", 0)
+                entry["squad_ids"] = transfer_step.get("squad_ids", [])
                 if transfer_step.get("new_squad"):
                     entry["new_squad"] = transfer_step["new_squad"]
 
@@ -1196,22 +1210,17 @@ def apply_availability_adjustments(
     for i, gw in enumerate(gws):
         gw_df = future_predictions[gw].copy()
 
-        # Zero injured players for all GWs
+        # Zero injured players for all GWs — catch all prediction columns
         injured_mask = gw_df["player_id"].isin(injured_ids)
-        gw_df.loc[injured_mask, "predicted_points"] = 0.0
-        if "captain_score" in gw_df.columns:
-            gw_df.loc[injured_mask, "captain_score"] = 0.0
-        if "predicted_next_gw_points_q80" in gw_df.columns:
-            gw_df.loc[injured_mask, "predicted_next_gw_points_q80"] = 0.0
+        pred_cols = [c for c in gw_df.columns if c.startswith("predicted_") or c in ("captain_score",)]
+        for col in pred_cols:
+            gw_df.loc[injured_mask, col] = 0.0
 
-        # Zero doubtful players for GW+1 only
+        # Zero doubtful players for GW+1 only — catch all prediction columns
         if i == 0:
             doubtful_mask = gw_df["player_id"].isin(doubtful_ids)
-            gw_df.loc[doubtful_mask, "predicted_points"] = 0.0
-            if "captain_score" in gw_df.columns:
-                gw_df.loc[doubtful_mask, "captain_score"] = 0.0
-            if "predicted_next_gw_points_q80" in gw_df.columns:
-                gw_df.loc[doubtful_mask, "predicted_next_gw_points_q80"] = 0.0
+            for col in pred_cols:
+                gw_df.loc[doubtful_mask, col] = 0.0
 
         adjusted[gw] = gw_df
 

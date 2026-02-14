@@ -105,15 +105,14 @@ class SeasonManager:
         for i, gw_entry in enumerate(current):
             event = gw_entry.get("event")
             if event in chip_events:
-                # WC/FH: FTs are preserved — chip transfers don't consume FTs
-                # but normal +1 FT accrual still happens
-                ft = min(ft + 1, 5)
+                # WC/FH: FTs preserved at pre-chip count, no accrual
                 continue
             transfers_made = gw_entry.get("event_transfers", 0)
             transfers_cost = gw_entry.get("event_transfers_cost", 0)
             paid = transfers_cost // 4 if transfers_cost > 0 else 0
             free_used = transfers_made - paid
             ft = ft - free_used
+            ft = max(ft, 0)  # Prevent negative propagation from API inconsistencies
             # Mid-season joiner: first GW's FT was consumed by team creation
             if i == 0 and first_event > 1:
                 ft = max(ft, 0)
@@ -884,8 +883,8 @@ class SeasonManager:
             season_id=season_id,
             gameweek=current_event,
             squad_json=json.dumps(squad),
-            bank=entry_hist.get("bank", 0) / 10,
-            team_value=entry_hist.get("value", 0) / 10,
+            bank=entry_hist.get("bank", gw_data.get("bank", 0)) / 10 if entry_hist else gw_data.get("bank", 0) / 10,
+            team_value=entry_hist.get("value", gw_data.get("value", 0)) / 10 if entry_hist else gw_data.get("value", 0) / 10,
             free_transfers=self._calculate_free_transfers(history),
             chip_used=chip_map.get(current_event),
             points=gw_data.get("points"),
@@ -917,6 +916,20 @@ class SeasonManager:
             rec_in_ids = {t["in"]["player_id"] for t in rec_transfers if t.get("in", {}).get("player_id")}
             actual_squad_ids = {p["player_id"] for p in squad}
             followed_transfers = 1 if rec_in_ids.issubset(actual_squad_ids) else 0
+
+            # WC/FH squad comparison: compare full recommended squad to actual
+            rec_chip = rec.get("chip_suggestion") if rec else None
+            rec_new_squad = rec.get("new_squad_json") if rec else None
+            if rec_chip in ("wildcard", "freehit") and rec_new_squad:
+                try:
+                    import json as _json
+                    rec_squad = _json.loads(rec_new_squad)
+                    rec_squad_ids = {p["player_id"] for p in rec_squad if "player_id" in p}
+                    if rec_squad_ids:
+                        overlap = rec_squad_ids & actual_squad_ids
+                        followed_transfers = 1 if len(overlap) >= 13 else 0  # 13/15 threshold
+                except (json.JSONDecodeError, TypeError, KeyError):
+                    pass
 
             actual_chip = chip_map.get(current_event)
             recommended_chip = rec.get("chip_suggestion")
@@ -1476,12 +1489,25 @@ class SeasonManager:
         if target_col not in pred_df.columns:
             return {chip: 0.0 for chip in available}
 
-        # Current XI predicted points
+        # Current XI predicted points (formation-aware)
         squad_preds = pred_df[pred_df["player_id"].isin(current_squad_ids)]
         if squad_preds.empty:
             return {chip: 0.0 for chip in available}
 
-        current_xi_pts = squad_preds.nlargest(11, target_col)[target_col].sum()
+        # Use formation-aware XI selection if position data is available
+        _temp = squad_preds.copy()
+        _temp["predicted_points"] = _temp[target_col]
+        if "position" in _temp.columns:
+            try:
+                xi = MultiWeekPlanner._select_formation_xi(_temp)
+                current_xi_pts = xi["predicted_points"].sum()
+                bench_preds = _temp[~_temp.index.isin(xi.index)]
+            except Exception:
+                current_xi_pts = squad_preds.nlargest(11, target_col)[target_col].sum()
+                bench_preds = None
+        else:
+            current_xi_pts = squad_preds.nlargest(11, target_col)[target_col].sum()
+            bench_preds = None
 
         # Fixture awareness: count DGW teams for current and future GWs
         fixture_calendar = self.db.get_fixture_calendar(season_id, from_gw=next_gw)
@@ -1497,9 +1523,12 @@ class SeasonManager:
         )
 
         if "bboost" in available:
-            # Bench Boost: sum of bench predictions (4 lowest of 15)
-            all_15 = squad_preds.nlargest(15, target_col)[target_col]
-            bench_pts = all_15.tail(4).sum() if len(all_15) >= 15 else 0
+            # Bench Boost: sum of bench predictions (formation-aware)
+            if bench_preds is not None and len(bench_preds) >= 4:
+                bench_pts = bench_preds["predicted_points"].sum()
+            else:
+                all_15 = squad_preds.nlargest(15, target_col)[target_col]
+                bench_pts = all_15.tail(4).sum() if len(all_15) >= 15 else 0
             # DGW boost: bench players with double fixtures are worth more
             dgw_boost = 1.0 + current_gw_dgw_count * 0.15
             bench_pts *= dgw_boost
@@ -1902,7 +1931,7 @@ class SeasonManager:
 
         # Compute available chips with half-season reset awareness
         # WC/FH reset at GW20 (available once per half: GW1-19 and GW20-38)
-        # BB/TC are one-time only across the whole season
+        # All 4 chips (WC, FH, BB, TC) available once per half (GW1-19 and GW20-38), 8 total
         current_gw = season.get("current_gw", 1)
         all_chips_list = [
             {"name": "wildcard", "label": "Wildcard"},

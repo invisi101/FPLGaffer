@@ -116,9 +116,15 @@ def _fetch_csv(url: str, cache_file: Path, force: bool = False) -> pd.DataFrame:
     if not force and _is_cache_fresh(cache_file):
         return pd.read_csv(cache_file, encoding="utf-8")
     print(f"  Fetching {url}")
-    resp = _fetch_url(url)
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    cache_file.write_text(resp.text, encoding="utf-8")
+    try:
+        resp = _fetch_url(url)
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        cache_file.write_text(resp.text, encoding="utf-8")
+    except (requests.RequestException, OSError) as e:
+        if cache_file.exists():
+            print(f"  Warning: fetch failed ({e}), using stale cache for {cache_file.name}")
+            return pd.read_csv(cache_file, encoding="utf-8")
+        raise
     return pd.read_csv(cache_file, encoding="utf-8")
 
 
@@ -129,39 +135,57 @@ def fetch_fpl_api(endpoint: str, force: bool = False) -> dict:
         return json.loads(cache_file.read_text(encoding="utf-8"))
     url = FPL_API_ENDPOINTS[endpoint]
     print(f"  Fetching {url}")
-    resp = _fetch_url(url)
-    data = resp.json()
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    cache_file.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    try:
+        resp = _fetch_url(url)
+        data = resp.json()
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        cache_file.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    except (requests.RequestException, OSError) as e:
+        if cache_file.exists():
+            print(f"  Warning: fetch failed ({e}), using stale cache for {cache_file.name}")
+            return json.loads(cache_file.read_text(encoding="utf-8"))
+        raise
+    return data
+
+
+_manager_cache: dict[str, tuple] = {}
+_MANAGER_CACHE_TTL = 60  # 60 seconds
+
+
+def _cached_manager_fetch(cache_key: str, fetch_fn):
+    """Simple TTL cache for manager API calls."""
+    now = time.time()
+    if cache_key in _manager_cache:
+        data, ts = _manager_cache[cache_key]
+        if now - ts < _MANAGER_CACHE_TTL:
+            return data
+    data = fetch_fn()
+    _manager_cache[cache_key] = (data, now)
     return data
 
 
 def fetch_manager_entry(manager_id: int) -> dict:
     """Fetch manager overview (name, bank, value, current_event)."""
     url = f"{FPL_API_BASE}/entry/{manager_id}/"
-    resp = _fetch_url(url)
-    return resp.json()
+    return _cached_manager_fetch(f"entry_{manager_id}", lambda: _fetch_url(url).json())
 
 
 def fetch_manager_picks(manager_id: int, event: int) -> dict:
     """Fetch manager's 15 picks for a gameweek."""
     url = f"{FPL_API_BASE}/entry/{manager_id}/event/{event}/picks/"
-    resp = _fetch_url(url)
-    return resp.json()
+    return _cached_manager_fetch(f"picks_{manager_id}_{event}", lambda: _fetch_url(url).json())
 
 
 def fetch_manager_history(manager_id: int) -> dict:
     """Fetch per-GW history (transfers, chips) for FT calculation."""
     url = f"{FPL_API_BASE}/entry/{manager_id}/history/"
-    resp = _fetch_url(url)
-    return resp.json()
+    return _cached_manager_fetch(f"history_{manager_id}", lambda: _fetch_url(url).json())
 
 
 def fetch_manager_transfers(manager_id: int) -> list[dict]:
     """Fetch all transfers made by a manager this season."""
     url = f"{FPL_API_BASE}/entry/{manager_id}/transfers/"
-    resp = _fetch_url(url)
-    return resp.json()
+    return _cached_manager_fetch(f"transfers_{manager_id}", lambda: _fetch_url(url).json())
 
 
 def _detect_max_gw(season: str, force: bool = False) -> int:

@@ -66,8 +66,6 @@ DEFAULT_FEATURES = {
         "vs_opponent_goals_avg", "vs_opponent_xg_avg", "vs_opponent_matches",
         # Market sentiment
         "transfers_in_event", "net_transfers",
-        # FPL index stats (per-GW delta, not cumulative)
-        "gw_influence",
         # Opponent attacking threat
         "opp_big_chances_allowed_last3",
     ],
@@ -712,8 +710,6 @@ SUB_MODEL_FEATURES = {
         "player_goals_last3", "player_assists_last3",
         "is_home", "cost", "next_gw_fixture_count",
         "player_minutes_played_last3", "starts_per_90",
-        # FPL index (per-GW delta, not cumulative)
-        "gw_influence",
     ],
     "goals_conceded": [
         "opp_opponent_xg_last3", "opp_goals_conceded_last3",
@@ -954,8 +950,8 @@ def predict_decomposed(
     # doesn't distinguish starters from bench warmers (backup GKPs get 100%).
     # Multiplying by availability_rate_last5 (fraction of recent GWs with
     # minutes) filters out players who are fit but don't actually get selected.
-    cop = pos_df["chance_of_playing"].fillna(0) / 100.0 if "chance_of_playing" in pos_df.columns else 0.8
-    avail = pos_df["availability_rate_last5"].fillna(0) if "availability_rate_last5" in pos_df.columns else 1.0
+    cop = pos_df["chance_of_playing"].fillna(100) / 100.0 if "chance_of_playing" in pos_df.columns else 0.8
+    avail = pos_df["availability_rate_last5"].fillna(0.75) if "availability_rate_last5" in pos_df.columns else pd.Series(0.75, index=pos_df.index)
     pos_df["p_plays"] = (cop * avail).clip(0, 1)
     pos_df["p_60plus"] = pos_df["p_plays"] * 0.85
 

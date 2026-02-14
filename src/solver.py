@@ -99,6 +99,9 @@ def solve_milp_team(
         for tc in df["team_code"].unique():
             team_mask = (df["team_code"] == tc).astype(float).values
             add_constraint(np.concatenate([team_mask, zeros]), 0, team_cap)
+    else:
+        import logging
+        logging.warning("team_code missing from solver input; max-3-per-team constraint disabled")
 
     add_constraint(np.concatenate([zeros, np.ones(n)]), 11, 11)
 
@@ -277,6 +280,9 @@ def solve_transfer_milp(
         for tc in df["team_code"].unique():
             team_mask = (df["team_code"] == tc).astype(float).values
             add_constraint(np.concatenate([team_mask, zeros]), 0, team_cap)
+    else:
+        import logging
+        logging.warning("team_code missing from solver input; max-3-per-team constraint disabled")
 
     # Exactly 11 starters
     add_constraint(np.concatenate([zeros, np.ones(n)]), 11, 11)

@@ -232,12 +232,26 @@ class SeasonDB:
     def save_gw_snapshot(self, season_id: int, gameweek: int, **kwargs):
         conn = self._conn()
         conn.execute(
-            """INSERT OR REPLACE INTO gw_snapshot
+            """INSERT INTO gw_snapshot
                (season_id, gameweek, squad_json, bank, team_value, free_transfers,
                 chip_used, points, total_points, overall_rank,
                 transfers_in_json, transfers_out_json, captain_id, captain_name,
                 transfers_cost)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(season_id, gameweek) DO UPDATE SET
+                 squad_json=excluded.squad_json,
+                 bank=excluded.bank,
+                 team_value=excluded.team_value,
+                 free_transfers=excluded.free_transfers,
+                 chip_used=excluded.chip_used,
+                 points=excluded.points,
+                 total_points=excluded.total_points,
+                 overall_rank=excluded.overall_rank,
+                 transfers_in_json=excluded.transfers_in_json,
+                 transfers_out_json=excluded.transfers_out_json,
+                 captain_id=excluded.captain_id,
+                 captain_name=excluded.captain_name,
+                 transfers_cost=excluded.transfers_cost""",
             (
                 season_id, gameweek,
                 kwargs.get("squad_json"),
@@ -283,11 +297,20 @@ class SeasonDB:
     def save_recommendation(self, season_id: int, gameweek: int, **kwargs):
         conn = self._conn()
         conn.execute(
-            """INSERT OR REPLACE INTO recommendation
+            """INSERT INTO recommendation
                (season_id, gameweek, transfers_json, captain_id, captain_name,
                 chip_suggestion, chip_values_json, bank_analysis_json,
                 new_squad_json, predicted_points)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(season_id, gameweek) DO UPDATE SET
+                 transfers_json=excluded.transfers_json,
+                 captain_id=excluded.captain_id,
+                 captain_name=excluded.captain_name,
+                 chip_suggestion=excluded.chip_suggestion,
+                 chip_values_json=excluded.chip_values_json,
+                 bank_analysis_json=excluded.bank_analysis_json,
+                 new_squad_json=excluded.new_squad_json,
+                 predicted_points=excluded.predicted_points""",
             (
                 season_id, gameweek,
                 kwargs.get("transfers_json"),
@@ -328,11 +351,19 @@ class SeasonDB:
     def save_outcome(self, season_id: int, gameweek: int, **kwargs):
         conn = self._conn()
         conn.execute(
-            """INSERT OR REPLACE INTO recommendation_outcome
+            """INSERT INTO recommendation_outcome
                (season_id, gameweek, followed_transfers, followed_captain,
                 followed_chip, recommended_points, actual_points, point_delta,
                 details_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(season_id, gameweek) DO UPDATE SET
+                 followed_transfers=excluded.followed_transfers,
+                 followed_captain=excluded.followed_captain,
+                 followed_chip=excluded.followed_chip,
+                 recommended_points=excluded.recommended_points,
+                 actual_points=excluded.actual_points,
+                 point_delta=excluded.point_delta,
+                 details_json=excluded.details_json""",
             (
                 season_id, gameweek,
                 kwargs.get("followed_transfers"),
@@ -363,10 +394,16 @@ class SeasonDB:
     def save_price_snapshot(self, season_id: int, player_id: int, **kwargs):
         conn = self._conn()
         conn.execute(
-            """INSERT OR REPLACE INTO price_tracker
+            """INSERT INTO price_tracker
                (season_id, player_id, web_name, team_code, price,
                 transfers_in_event, transfers_out_event, snapshot_date)
-               VALUES (?, ?, ?, ?, ?, ?, ?, date('now'))""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, date('now'))
+               ON CONFLICT(season_id, player_id, snapshot_date) DO UPDATE SET
+                 web_name=excluded.web_name,
+                 team_code=excluded.team_code,
+                 price=excluded.price,
+                 transfers_in_event=excluded.transfers_in_event,
+                 transfers_out_event=excluded.transfers_out_event""",
             (
                 season_id, player_id,
                 kwargs.get("web_name"),
@@ -382,10 +419,16 @@ class SeasonDB:
     def save_price_snapshots_bulk(self, season_id: int, players: list[dict]):
         conn = self._conn()
         conn.executemany(
-            """INSERT OR REPLACE INTO price_tracker
+            """INSERT INTO price_tracker
                (season_id, player_id, web_name, team_code, price,
                 transfers_in_event, transfers_out_event, snapshot_date)
-               VALUES (?, ?, ?, ?, ?, ?, ?, date('now'))""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, date('now'))
+               ON CONFLICT(season_id, player_id, snapshot_date) DO UPDATE SET
+                 web_name=excluded.web_name,
+                 team_code=excluded.team_code,
+                 price=excluded.price,
+                 transfers_in_event=excluded.transfers_in_event,
+                 transfers_out_event=excluded.transfers_out_event""",
             [
                 (
                     season_id, p["player_id"], p.get("web_name"), p.get("team_code"),
@@ -441,10 +484,18 @@ class SeasonDB:
     def save_fixture_calendar(self, season_id: int, fixtures: list[dict]):
         conn = self._conn()
         conn.executemany(
-            """INSERT OR REPLACE INTO fixture_calendar
+            """INSERT INTO fixture_calendar
                (season_id, team_id, team_code, team_short, gameweek, fixture_count,
                 opponents_json, fdr_avg, is_dgw, is_bgw)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(season_id, team_id, gameweek) DO UPDATE SET
+                 team_code=excluded.team_code,
+                 team_short=excluded.team_short,
+                 fixture_count=excluded.fixture_count,
+                 opponents_json=excluded.opponents_json,
+                 fdr_avg=excluded.fdr_avg,
+                 is_dgw=excluded.is_dgw,
+                 is_bgw=excluded.is_bgw""",
             [
                 (
                     season_id, f["team_id"], f.get("team_code"),
@@ -552,9 +603,12 @@ class SeasonDB:
                             plan_json: str, chip_heatmap_json: str):
         conn = self._conn()
         conn.execute(
-            """INSERT OR REPLACE INTO strategic_plan
+            """INSERT INTO strategic_plan
                (season_id, as_of_gw, plan_json, chip_heatmap_json)
-               VALUES (?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(season_id, as_of_gw) DO UPDATE SET
+                 plan_json=excluded.plan_json,
+                 chip_heatmap_json=excluded.chip_heatmap_json""",
             (season_id, as_of_gw, plan_json, chip_heatmap_json),
         )
         conn.commit()

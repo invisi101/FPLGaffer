@@ -48,12 +48,12 @@ class TestCalculateFreeTransfers:
         result = app_calc_ft(history)
         assert result == 5  # Capped at 5
 
-    def test_wildcard_preserves_fts_with_accrual(self):
-        """WC preserves FTs and +1 accrual happens.
+    def test_wildcard_preserves_fts_no_accrual(self):
+        """WC preserves FTs at pre-chip count, no accrual.
 
         GW1: 0 transfers => FT goes 1 -> 2
         GW2: 0 transfers => FT goes 2 -> 3
-        GW3: WC (5 transfers) => FTs preserved at 3, +1 => 4
+        GW3: WC (5 transfers) => FTs preserved at 3, no accrual
         """
         history = {
             "current": [
@@ -63,10 +63,10 @@ class TestCalculateFreeTransfers:
             ],
             "chips": [{"event": 3, "name": "wildcard"}],
         }
-        assert app_calc_ft(history) == 4
+        assert app_calc_ft(history) == 3
 
-    def test_freehit_preserves_fts_with_accrual(self):
-        """FH preserves FTs and +1 accrual happens."""
+    def test_freehit_preserves_fts_no_accrual(self):
+        """FH preserves FTs at pre-chip count, no accrual."""
         history = {
             "current": [
                 {"event": 1, "event_transfers": 0, "event_transfers_cost": 0},
@@ -75,7 +75,7 @@ class TestCalculateFreeTransfers:
             ],
             "chips": [{"event": 3, "name": "freehit"}],
         }
-        assert app_calc_ft(history) == 4
+        assert app_calc_ft(history) == 3
 
     def test_paid_transfers_dont_consume_fts(self):
         """Paid transfers (cost > 0) consume FTs first, then the rest are hits.
