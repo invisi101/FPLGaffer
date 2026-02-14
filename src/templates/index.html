@@ -1,0 +1,3297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@600;800&display=swap" rel="stylesheet">
+<title>FPL Points Predictor</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #181a24;
+    --surface2: #1f2231;
+    --border: #2a2d3e;
+    --text: #e0e0e8;
+    --text2: #8e91a4;
+    --accent: #6c63ff;
+    --accent2: #8b83ff;
+    --green: #2dd4a0;
+    --red: #f87171;
+    --yellow: #fbbf24;
+    --orange: #fb923c;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+  }
+
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 24px;
+    background: linear-gradient(135deg, var(--surface) 0%, #1a1d2e 100%);
+    border-bottom: 1px solid var(--border);
+  }
+  .header-brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .header-icon {
+    width: 32px;
+    height: 32px;
+    filter: drop-shadow(0 0 6px rgba(108, 99, 255, 0.5));
+  }
+  .header h1 {
+    font-family: 'Outfit', sans-serif;
+    font-size: 24px;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+    background: linear-gradient(135deg, #fff 0%, var(--accent2) 50%, var(--green) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .header h1 span {
+    font-weight: 600;
+    font-size: 14px;
+    background: linear-gradient(135deg, var(--text2) 0%, var(--accent) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-left: 2px;
+  }
+  .cache-badge {
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: 12px;
+    background: var(--surface2);
+    color: var(--text2);
+  }
+  .cache-badge.fresh { color: var(--green); }
+  .cache-badge.stale { color: var(--yellow); }
+
+  .bar-icon {
+    display: flex;
+    align-items: center;
+    padding: 4px;
+    opacity: 0.9;
+    filter: drop-shadow(0 0 4px rgba(255,255,255,0.15));
+    transition: transform 0.3s, filter 0.3s;
+    cursor: default;
+  }
+  .bar-icon:hover {
+    transform: scale(1.15) rotate(8deg);
+    filter: drop-shadow(0 0 8px rgba(255,255,255,0.3));
+  }
+  .action-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 24px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+  }
+
+  .btn {
+    padding: 8px 16px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface2);
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .btn:hover { background: var(--accent); border-color: var(--accent); }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn:disabled:hover { background: var(--surface2); border-color: var(--border); }
+  .btn-primary { background: var(--accent); border-color: var(--accent); }
+  .btn-primary:hover { background: var(--accent2); }
+
+  .status-area {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--text2);
+    max-width: 50%;
+  }
+  .status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--text2);
+    flex-shrink: 0;
+  }
+  .status-dot.running {
+    background: var(--green);
+    animation: pulse 1.2s infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+  .status-text {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .tabs {
+    display: flex;
+    padding: 0 24px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+  }
+  .tab {
+    padding: 10px 20px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text2);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all 0.15s;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  .content { padding: 16px 24px; }
+
+  /* Predictions panel */
+  .controls-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+  }
+  .pos-filters { display: flex; gap: 4px; }
+  .pos-btn {
+    padding: 5px 12px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text2);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .pos-btn:hover { border-color: var(--accent); color: var(--text); }
+  .pos-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+  .search-box {
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface2);
+    color: var(--text);
+    font-size: 13px;
+    width: 220px;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  .search-box:focus { border-color: var(--accent); }
+  .search-box::placeholder { color: var(--text2); }
+
+  .player-count {
+    font-size: 12px;
+    color: var(--text2);
+    margin-left: auto;
+  }
+
+  .table-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  thead th {
+    position: sticky;
+    top: 0;
+    background: var(--surface2);
+    padding: 10px 12px;
+    text-align: left;
+    font-weight: 600;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    color: var(--text2);
+    cursor: pointer;
+    white-space: nowrap;
+    border-bottom: 1px solid var(--border);
+    user-select: none;
+  }
+  thead th:hover { color: var(--text); }
+  thead th.sorted { color: var(--accent); }
+  thead th .sort-arrow { font-size: 10px; margin-left: 4px; }
+  tbody td {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  tbody tr:nth-child(even) { background: var(--surface); }
+  tbody tr:hover { background: var(--surface2); }
+
+  /* FDR colour coding */
+  .fdr-1 { background: #166534; color: #fff; }
+  .fdr-2 { background: #15803d; color: #fff; }
+  .fdr-3 { background: #a16207; color: #fff; }
+  .fdr-4 { background: #c2410c; color: #fff; }
+  .fdr-5 { background: #991b1b; color: #fff; }
+  .fdr-cell {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-weight: 600;
+    font-size: 12px;
+    min-width: 28px;
+    text-align: center;
+  }
+
+  .home-badge {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .home-badge.home { background: #166534; color: #4ade80; }
+  .home-badge.away { background: #1e293b; color: var(--text2); }
+
+  .pos-tag {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-weight: 600;
+    background: var(--surface2);
+  }
+  .pos-tag.GKP { color: #f59e0b; }
+  .pos-tag.DEF { color: #22d3ee; }
+  .pos-tag.MID { color: #a78bfa; }
+  .pos-tag.FWD { color: #f87171; }
+
+  /* Feature insights panel */
+  .insights-panel { display: none; }
+  .insights-panel.visible { display: block; }
+
+  .model-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+  .model-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+  }
+  .model-card h4 {
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+  .model-card .meta {
+    font-size: 12px;
+    color: var(--text2);
+  }
+  .model-card .mae {
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--accent);
+    margin: 4px 0;
+  }
+
+  .chart-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
+    gap: 16px;
+    margin-top: 16px;
+  }
+  .chart-grid img {
+    width: 100%;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+  }
+
+  .report-block {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    margin-top: 16px;
+    max-height: 500px;
+    overflow-y: auto;
+    font-family: 'SF Mono', Consolas, monospace;
+    font-size: 12px;
+    white-space: pre-wrap;
+    color: var(--text2);
+    line-height: 1.6;
+  }
+
+  .progress-log {
+    display: none;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin: 12px 24px;
+    padding: 12px;
+    max-height: 200px;
+    overflow-y: auto;
+    font-family: 'SF Mono', Consolas, monospace;
+    font-size: 12px;
+    color: var(--text2);
+    line-height: 1.8;
+  }
+  .progress-log.visible { display: block; }
+
+  .empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--text2);
+  }
+  .empty-state h3 { font-size: 18px; margin-bottom: 8px; color: var(--text); }
+  .empty-state p { font-size: 14px; }
+
+  /* Best Team panel */
+  .team-panel { display: none; }
+  .team-panel.visible { display: block; }
+
+  .team-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+  }
+  .team-controls label { font-size: 13px; color: var(--text2); }
+  .budget-input {
+    width: 90px;
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface2);
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 600;
+    outline: none;
+    text-align: center;
+  }
+  .budget-input:focus { border-color: var(--accent); }
+  .target-select {
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface2);
+    color: var(--text);
+    font-size: 13px;
+    outline: none;
+  }
+
+  .team-summary {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+  }
+  .summary-stat {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 20px;
+    text-align: center;
+  }
+  .summary-stat .label { font-size: 11px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.5px; }
+  .summary-stat .value { font-size: 22px; font-weight: 700; color: var(--accent); margin-top: 2px; }
+  .summary-stat .value.green { color: var(--green); }
+  .summary-stat .value.model { color: var(--accent); }
+  .summary-stat .value.ep { color: var(--orange); }
+  .summary-stat .value.form { color: var(--text2); }
+  .summary-stat .value.best { color: var(--green); }
+
+  /* Pitch */
+  .pitch {
+    position: relative;
+    width: 100%;
+    max-width: 720px;
+    height: 560px;
+    margin: 0 auto;
+    background: linear-gradient(180deg, #1a6e2e 0%, #1d7a33 10%, #1a6e2e 20%, #1d7a33 30%, #1a6e2e 40%, #1d7a33 50%, #1a6e2e 60%, #1d7a33 70%, #1a6e2e 80%, #1d7a33 90%, #1a6e2e 100%);
+    border-radius: 12px;
+    overflow: hidden;
+    border: 3px solid rgba(255,255,255,0.15);
+  }
+  /* Field markings */
+  .pitch::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background:
+      /* halfway line */
+      linear-gradient(0deg, transparent calc(50% - 1px), rgba(255,255,255,0.2) calc(50% - 1px), rgba(255,255,255,0.2) calc(50% + 1px), transparent calc(50% + 1px)),
+      /* center circle */
+      radial-gradient(circle at 50% 50%, transparent 58px, rgba(255,255,255,0.2) 58px, rgba(255,255,255,0.2) 60px, transparent 60px),
+      /* top penalty box */
+      linear-gradient(0deg, transparent 0%, transparent 18%, rgba(255,255,255,0.0) 18%) no-repeat,
+      /* bottom penalty box */
+      linear-gradient(0deg, transparent 82%, rgba(255,255,255,0.0) 82%);
+    pointer-events: none;
+  }
+  .pitch::after {
+    content: '';
+    position: absolute;
+    /* top penalty area */
+    top: 0; left: 20%; width: 60%; height: 20%;
+    border: 2px solid rgba(255,255,255,0.15);
+    border-top: none;
+    pointer-events: none;
+  }
+  .pitch-bottom-box {
+    position: absolute;
+    bottom: 0; left: 20%; width: 60%; height: 20%;
+    border: 2px solid rgba(255,255,255,0.15);
+    border-bottom: none;
+    pointer-events: none;
+  }
+
+  .pitch-row {
+    position: absolute;
+    left: 0; right: 0;
+    display: flex;
+    justify-content: center;
+    gap: 8px;
+    padding: 0 12px;
+  }
+  .pitch-row.fwd { top: 10px; }
+  .pitch-row.mid { top: 148px; }
+  .pitch-row.def { top: 286px; }
+  .pitch-row.gkp { top: 430px; }
+
+  .pitch-card {
+    background: rgba(15, 17, 23, 0.88);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 8px;
+    padding: 8px 10px;
+    text-align: center;
+    min-width: 90px;
+    max-width: 120px;
+    backdrop-filter: blur(4px);
+  }
+  .pitch-card .p-name {
+    font-size: 12px;
+    font-weight: 700;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-bottom: 2px;
+  }
+  .pitch-card .p-team {
+    font-size: 10px;
+    color: var(--text2);
+  }
+  .pitch-card .p-pts {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--green);
+    margin-top: 2px;
+  }
+  .pitch-card .p-cost {
+    font-size: 10px;
+    color: var(--text2);
+  }
+  .pitch-card .p-fdr {
+    display: inline-block;
+    padding: 0 5px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 600;
+    margin-top: 2px;
+  }
+
+  .bench-area {
+    max-width: 720px;
+    margin: 16px auto 0;
+  }
+  .bench-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text2);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 8px;
+  }
+  .bench-row {
+    display: flex;
+    gap: 8px;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+  .bench-card {
+    background: var(--surface);
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+    padding: 8px 14px;
+    text-align: center;
+    opacity: 0.6;
+    min-width: 100px;
+  }
+  .bench-card .p-name { font-size: 12px; font-weight: 600; }
+  .bench-card .p-team { font-size: 10px; color: var(--text2); }
+  .bench-card .p-pts { font-size: 14px; font-weight: 700; color: var(--accent); margin-top: 2px; }
+  .bench-card .p-cost { font-size: 10px; color: var(--text2); }
+
+  /* Backtest panel */
+  .backtest-panel { display: none; }
+  .backtest-panel.visible { display: block; }
+
+  .bt-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+  }
+  .bt-controls label { font-size: 13px; color: var(--text2); }
+  .bt-input {
+    width: 60px;
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface2);
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 600;
+    text-align: center;
+    outline: none;
+  }
+  .bt-input:focus { border-color: var(--accent); }
+
+  .bt-summary {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+  }
+
+  .bt-section-title {
+    font-size: 15px;
+    font-weight: 600;
+    margin: 20px 0 10px;
+    color: var(--text);
+  }
+
+  .bt-comparison {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  .bt-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+  }
+  .bt-card .bc-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text2);
+    margin-bottom: 4px;
+  }
+  .bt-card .bc-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 2px;
+  }
+  .bt-card .bc-name { font-size: 12px; color: var(--text2); }
+  .bt-card .bc-val { font-size: 16px; font-weight: 700; }
+  .bt-card .bc-val.model { color: var(--accent); }
+  .bt-card .bc-val.ep { color: var(--orange); }
+  .bt-card .bc-val.form { color: var(--text2); }
+  .bt-card .bc-val.best { color: var(--green); }
+
+  .bt-bar {
+    height: 4px;
+    border-radius: 2px;
+    background: var(--border);
+    margin-top: 6px;
+    overflow: hidden;
+  }
+  .bt-bar-fill {
+    height: 100%;
+    border-radius: 2px;
+    transition: width 0.3s;
+  }
+
+  .bt-table-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 20px;
+  }
+  .bt-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .bt-table th {
+    position: sticky;
+    top: 0;
+    background: var(--surface2);
+    padding: 8px 12px;
+    text-align: left;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    color: var(--text2);
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  .bt-table td {
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  .bt-table tr:nth-child(even) { background: var(--surface); }
+  .bt-table tr:hover { background: var(--surface2); }
+  .bt-good { color: var(--green); }
+  .bt-bad { color: var(--red); }
+  .bt-winner { background: rgba(108, 99, 255, 0.1); }
+
+  .bt-pos-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  .bt-pos-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+  }
+  .bt-pos-card h4 { font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+  .bt-pos-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    padding: 3px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .bt-pos-row:last-child { border-bottom: none; }
+  .bt-note {
+    font-size: 12px;
+    color: var(--text2);
+    margin-top: 16px;
+    padding: 10px 14px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    line-height: 1.6;
+  }
+
+  /* GW Compare panel */
+  .compare-panel { display: none; }
+  .compare-panel.visible { display: block; }
+
+  .compare-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+  }
+  .compare-controls label { font-size: 13px; color: var(--text2); }
+  .compare-controls .bt-input { width: 70px; }
+
+  .compare-summary {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+  }
+
+  .compare-pitches {
+    display: flex;
+    gap: 24px;
+    margin-top: 16px;
+  }
+  .compare-side {
+    flex: 1;
+    min-width: 0;
+  }
+  .compare-side h3 {
+    font-size: 15px;
+    font-weight: 600;
+    margin-bottom: 10px;
+    text-align: center;
+  }
+  .compare-side .pitch {
+    max-width: 100%;
+    height: 480px;
+  }
+  .compare-side .pitch-card {
+    min-width: 70px;
+    max-width: 100px;
+    padding: 6px 6px;
+  }
+  .compare-side .pitch-card .p-name { font-size: 11px; }
+  .compare-side .pitch-card .p-team { font-size: 9px; }
+  .compare-side .pitch-card .p-pts { font-size: 14px; }
+  .compare-side .pitch-card .p-cost { font-size: 9px; }
+  .compare-side .pitch-card .p-pred { font-size: 9px; color: var(--text2); }
+  .compare-side .pitch-row.fwd { top: 8px; }
+  .compare-side .pitch-row.mid { top: 126px; }
+  .compare-side .pitch-row.def { top: 248px; }
+  .compare-side .pitch-row.gkp { top: 372px; }
+
+  .pitch-card.injured { border-color: var(--red); opacity: 0.7; }
+  .pitch-card.doubtful { border-color: var(--yellow); }
+  .p-news { font-size: 9px; color: var(--red); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 110px; }
+  .p-avail { font-size: 9px; }
+  .p-avail.available { color: var(--green); }
+  .p-avail.doubtful { color: var(--yellow); }
+  .p-avail.injured { color: var(--red); }
+  .captain-badge { color: #ef4444; font-weight: 700; font-size: 10px; }
+  .vc-badge { color: var(--yellow); font-weight: 700; font-size: 10px; }
+
+  .pitch-card.overlap {
+    border: 2px solid var(--yellow) !important;
+    box-shadow: 0 0 10px rgba(251, 191, 36, 0.4);
+  }
+
+  /* Transfer recommendations */
+  .transfer-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 24px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+  }
+  .transfer-controls label { font-size: 13px; color: var(--text2); }
+  .transfer-controls .budget-input { width: 60px; }
+
+  .transfer-cards { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; max-width: 720px; margin-left: auto; margin-right: auto; }
+  .transfer-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 16px;
+  }
+  .transfer-side {
+    flex: 1;
+    min-width: 0;
+  }
+  .transfer-side .ts-name { font-size: 14px; font-weight: 600; }
+  .transfer-side .ts-meta { font-size: 11px; color: var(--text2); }
+  .transfer-side .ts-pts { font-size: 16px; font-weight: 700; margin-top: 2px; }
+  .transfer-out .ts-name { color: var(--red); }
+  .transfer-out .ts-pts { color: var(--red); }
+  .transfer-in .ts-name { color: var(--green); }
+  .transfer-in .ts-pts { color: var(--green); }
+  .transfer-arrow { font-size: 22px; color: var(--text2); flex-shrink: 0; }
+  .transfer-delta {
+    text-align: right;
+    flex-shrink: 0;
+    min-width: 70px;
+  }
+  .transfer-delta .td-pts { font-size: 14px; font-weight: 700; }
+  .transfer-delta .td-cost { font-size: 11px; color: var(--text2); }
+
+  .pitch-card.new-signing {
+    border: 2px solid var(--green) !important;
+    box-shadow: 0 0 8px rgba(45, 212, 160, 0.4);
+  }
+
+  @media (max-width: 900px) {
+    .compare-pitches { flex-direction: column; }
+  }
+
+  /* Season panel */
+  .season-panel { display: none; }
+  .season-panel.visible { display: block; }
+
+  .season-sub-tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+  }
+  .season-sub-tab {
+    padding: 6px 14px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text2);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .season-sub-tab:hover { border-color: var(--accent); color: var(--text); }
+  .season-sub-tab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+  .season-section { display: none; }
+  .season-section.visible { display: block; }
+
+  .season-init-form {
+    max-width: 400px;
+    margin: 40px auto;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 32px;
+    text-align: center;
+  }
+  .season-init-form h3 { margin-bottom: 16px; font-size: 18px; }
+  .season-init-form p { color: var(--text2); margin-bottom: 20px; font-size: 13px; }
+  .season-init-form input {
+    padding: 8px 14px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface2);
+    color: var(--text);
+    font-size: 14px;
+    width: 100%;
+    margin-bottom: 12px;
+    outline: none;
+  }
+  .season-init-form input:focus { border-color: var(--accent); }
+
+  .summary-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  .summary-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+    text-align: center;
+  }
+  .summary-card .sc-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text2);
+    margin-bottom: 4px;
+  }
+  .summary-card .sc-value {
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--text);
+  }
+  .summary-card .sc-value.green { color: var(--green); }
+  .summary-card .sc-value.accent { color: var(--accent); }
+
+  .season-chart-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+  .season-chart-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+  }
+  .season-chart-box h4 {
+    font-size: 13px;
+    color: var(--text2);
+    margin-bottom: 8px;
+  }
+
+  .workflow-actions {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+  }
+
+  .rec-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 12px;
+  }
+  .rec-card h4 {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+  .rec-transfers {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+  }
+  .rec-transfer-pair {
+    background: var(--surface2);
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .rec-out { color: var(--red); }
+  .rec-in { color: var(--green); }
+
+  .fixture-grid-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  .fixture-grid {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+  .fixture-grid th {
+    position: sticky;
+    top: 0;
+    background: var(--surface2);
+    padding: 6px 8px;
+    text-align: center;
+    font-size: 11px;
+    color: var(--text2);
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+    min-width: 70px;
+  }
+  .fixture-grid th:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    text-align: left;
+  }
+  .fixture-grid td {
+    padding: 4px 6px;
+    border-bottom: 1px solid var(--border);
+    text-align: center;
+    white-space: nowrap;
+  }
+  .fixture-grid td:first-child {
+    position: sticky;
+    left: 0;
+    background: var(--surface2);
+    font-weight: 600;
+    text-align: left;
+    z-index: 1;
+  }
+  .fixture-grid tr:nth-child(even) td:first-child { background: var(--surface); }
+  .fixture-grid tr:hover td { background: var(--surface2); }
+  .fx-dgw { background: rgba(45, 212, 160, 0.15) !important; }
+  .fx-bgw { background: rgba(255, 255, 255, 0.05) !important; color: var(--text2); }
+  .fx-fdr-1 { background: rgba(22, 101, 52, 0.5); }
+  .fx-fdr-2 { background: rgba(21, 128, 61, 0.4); }
+  .fx-fdr-3 { background: rgba(161, 98, 7, 0.3); }
+  .fx-fdr-4 { background: rgba(194, 65, 12, 0.4); }
+  .fx-fdr-5 { background: rgba(153, 27, 27, 0.5); }
+
+  .chip-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  .chip-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    text-align: center;
+  }
+  .chip-card.used { opacity: 0.5; }
+  .chip-card .chip-name { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+  .chip-card .chip-status { font-size: 12px; color: var(--text2); }
+  .chip-card .chip-status.available { color: var(--green); }
+  .chip-card .chip-value { font-size: 18px; font-weight: 700; color: var(--accent); margin-top: 8px; }
+
+  .price-alerts {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 10px;
+    margin-bottom: 16px;
+  }
+  .price-alert {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 14px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 13px;
+  }
+  .price-alert .pa-dir { font-weight: 700; }
+  .price-alert .pa-dir.rise { color: var(--green); }
+  .price-alert .pa-dir.fall { color: var(--red); }
+
+  .accuracy-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="header">
+  <div class="header-brand">
+    <svg class="header-icon" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="32" cy="32" r="30" fill="#1a1d2e" stroke="url(#ball-grad)" stroke-width="3"/>
+      <path d="M32 4 L38 18 L52 14 L48 28 L60 32 L48 36 L52 50 L38 46 L32 60 L26 46 L12 50 L16 36 L4 32 L16 28 L12 14 L26 18 Z" fill="none" stroke="url(#ball-grad)" stroke-width="1.5" opacity="0.5"/>
+      <polygon points="32,12 37,24 32,20 27,24" fill="url(#ball-grad)" opacity="0.8"/>
+      <polygon points="32,52 37,40 32,44 27,40" fill="url(#ball-grad)" opacity="0.8"/>
+      <polygon points="12,32 24,27 20,32 24,37" fill="url(#ball-grad)" opacity="0.8"/>
+      <polygon points="52,32 40,27 44,32 40,37" fill="url(#ball-grad)" opacity="0.8"/>
+      <circle cx="32" cy="32" r="6" fill="none" stroke="url(#ball-grad)" stroke-width="1.5"/>
+      <defs>
+        <linearGradient id="ball-grad" x1="0" y1="0" x2="64" y2="64">
+          <stop offset="0%" stop-color="#6c63ff"/>
+          <stop offset="100%" stop-color="#2dd4a0"/>
+        </linearGradient>
+      </defs>
+    </svg>
+    <h1>FPL Points Predictor</h1>
+  </div>
+  <div style="display:flex;align-items:center;gap:10px">
+    <span class="cache-badge" id="gwBadge" style="font-weight:600"></span>
+    <span class="cache-badge" id="cacheBadge">Loading...</span>
+  </div>
+</div>
+
+<!-- Action Bar -->
+<div class="action-bar">
+  <span class="bar-icon" title="Tools & Analysis">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="url(#gearGrad)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <defs><linearGradient id="gearGrad" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#f39c12"/><stop offset="100%" stop-color="#e74c3c"/></linearGradient></defs>
+      <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+    </svg>
+  </span>
+  <button class="btn" id="btnRefresh" onclick="refreshData()">🔄 Get Latest Data</button>
+  <button class="btn btn-primary" id="btnTrain" onclick="trainModels()">🧠 Train Models</button>
+  <button class="btn" id="btnFeatures" onclick="runFeatureSelection()">🎯 Run Feature Selection</button>
+  <button class="btn" id="btnXgbImportance" onclick="runXgbImportance()">📈 Model Importance</button>
+  <span style="border-left:1px solid #444;height:24px;margin:0 8px"></span>
+  <button class="btn" onclick="switchTabByView('insights')">📊 Feature Insights</button>
+  <button class="btn" onclick="switchTabByView('backtest')">🧪 Backtest</button>
+  <button class="btn" onclick="switchTabByView('gwcompare')">⚖️ GW Compare</button>
+  <div class="status-area">
+    <div class="status-dot" id="statusDot"></div>
+    <span class="status-text" id="statusText">Idle</span>
+  </div>
+</div>
+
+<!-- Progress Log -->
+<div class="progress-log" id="progressLog"></div>
+
+<!-- View Tabs -->
+<div class="tabs">
+  <span class="bar-icon" title="Management" style="margin-right:4px">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="url(#caseGrad)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <defs><linearGradient id="caseGrad" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#00b894"/><stop offset="100%" stop-color="#0984e3"/></linearGradient></defs>
+      <rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/><line x1="12" y1="12" x2="12" y2="16"/><line x1="2" y1="12" x2="22" y2="12"/>
+    </svg>
+  </span>
+  <div class="tab active" data-view="predictions" onclick="switchTab(this)">🔮 Predictions</div>
+  <div class="tab" data-view="bestteam" onclick="switchTab(this)">🏆 Best Team</div>
+  <div class="tab" data-view="myteam" onclick="switchTab(this)">🧸 My Team</div>
+  <div class="tab" data-view="season" onclick="switchTab(this)">📅 Season</div>
+</div>
+
+<!-- Predictions Panel -->
+<div class="content" id="predictionsPanel">
+  <div class="controls-row">
+    <div class="pos-filters">
+      <button class="pos-btn active" data-pos="ALL" onclick="filterPosition(this)">All</button>
+      <button class="pos-btn" data-pos="GKP" onclick="filterPosition(this)">GKP</button>
+      <button class="pos-btn" data-pos="DEF" onclick="filterPosition(this)">DEF</button>
+      <button class="pos-btn" data-pos="MID" onclick="filterPosition(this)">MID</button>
+      <button class="pos-btn" data-pos="FWD" onclick="filterPosition(this)">FWD</button>
+    </div>
+    <input type="text" class="search-box" id="searchBox" placeholder="Search players..." oninput="debounceSearch()">
+    <span class="player-count" id="playerCount"></span>
+  </div>
+  <div class="table-wrap" id="tableWrap">
+    <table>
+      <thead id="tableHead"></thead>
+      <tbody id="tableBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Best Team Panel -->
+<div class="content team-panel" id="bestTeamPanel">
+  <div class="team-controls">
+    <label>Budget:</label>
+    <input type="number" class="budget-input" id="budgetInput" value="100.0" step="0.5" min="50" max="200">
+    <label>Optimise for:</label>
+    <select class="target-select" id="targetSelect">
+      <option value="predicted_next_gw_points">Next GW Points</option>
+      <option value="predicted_next_3gw_points">Next 3 GW Points</option>
+    </select>
+    <button class="btn btn-primary" onclick="pickBestTeam()">Pick Team</button>
+    <button class="btn" id="btnLockIn" onclick="lockInTeam()" disabled>Lock In This Team</button>
+  </div>
+  <div class="team-summary" id="teamSummary"></div>
+  <div id="squadDisplay">
+    <div class="empty-state"><h3>Pick Your Best Team</h3><p>Set a budget above and click "Pick Team" to find the optimal squad.</p><p style="color:#999;font-size:12px;margin-top:8px">"Lock In This Team" saves the model's predicted squad for the gameweek so you can compare it later in ⚖️ GW Compare against the actual best-performing team.</p></div>
+  </div>
+</div>
+
+<!-- Backtest Panel -->
+<div class="content backtest-panel" id="backtestPanel">
+  <div class="bt-controls">
+    <label>From GW:</label>
+    <input type="number" class="bt-input" id="btStartGW" value="5" min="2" max="38">
+    <label>To GW:</label>
+    <input type="number" class="bt-input" id="btEndGW" value="25" min="2" max="38">
+    <label style="display:flex;align-items:center;gap:4px;cursor:pointer">
+      <input type="checkbox" id="btMultiSeason" style="accent-color:var(--accent)"> Multi-Season
+    </label>
+    <button class="btn btn-primary" onclick="runBacktest()">Run Backtest</button>
+  </div>
+  <div id="btContent">
+    <div class="empty-state"><h3>Backtest</h3><p>Test model accuracy against historical gameweeks.<br>Compares Model vs FPL's ep_next vs naive Form baseline vs Last 3 GW Avg.</p></div>
+  </div>
+</div>
+
+<!-- GW Compare Panel -->
+<div class="content compare-panel" id="gwComparePanel">
+  <div class="compare-controls">
+    <label>Gameweek:</label>
+    <input type="number" class="bt-input" id="cmpGW" value="10" min="1" max="38" onchange="loadLockInInfo()">
+    <button class="btn btn-primary" onclick="runGWCompare()">Compare</button>
+    <span id="cmpLockInfo" style="font-size:12px;color:var(--text2);margin-left:8px"></span>
+  </div>
+  <div class="compare-summary" id="cmpSummary"></div>
+  <div id="cmpContent">
+    <div class="empty-state"><h3>GW Compare</h3><p>Lock in a team from the Best Team tab, then come back here to see how it performed vs the best possible team.</p></div>
+  </div>
+</div>
+
+<!-- My Team Panel -->
+<div class="content team-panel" id="myTeamPanel">
+  <div class="team-controls">
+    <label>Manager ID:</label>
+    <input type="number" class="budget-input" id="managerIdInput" value="904686" style="width:120px">
+    <button class="btn btn-primary" onclick="importMyTeam()">Import Squad</button>
+    <span id="myTeamManagerInfo" style="font-size:13px;color:var(--text2);margin-left:12px"></span>
+  </div>
+  <div class="team-summary" id="myTeamSummary"></div>
+  <div id="myTeamDisplay">
+    <div class="empty-state"><h3>Import Your FPL Team</h3><p>Enter your FPL Manager ID above and click "Import Squad" to see your current team with predictions.</p></div>
+  </div>
+  <!-- Transfer Recommendations (visible after squad import) -->
+  <div id="transferSection" style="display:none">
+    <div class="transfer-controls">
+      <label style="font-weight:600;color:var(--text);font-size:14px">Transfer Recommendations</label>
+      <label>Max Transfers:</label>
+      <input type="number" class="budget-input" id="transferCount" value="1" min="1" max="5" style="width:60px">
+      <label>Optimise for:</label>
+      <select class="target-select" id="transferTarget">
+        <option value="predicted_next_gw_points">Next GW Points</option>
+        <option value="predicted_next_3gw_points">Next 3 GW Points</option>
+      </select>
+      <label style="display:flex;align-items:center;gap:4px;cursor:pointer">
+        <input type="checkbox" id="transferWildcard" style="accent-color:var(--accent)" onchange="toggleWildcard()"> Wildcard
+      </label>
+      <button class="btn btn-primary" id="btnFindTransfers" onclick="findTransfers()">Find Transfers</button>
+    </div>
+    <div id="transferResults"></div>
+  </div>
+</div>
+
+<!-- Feature Insights Panel -->
+<div class="content insights-panel" id="insightsPanel">
+  <h3 style="margin-bottom: 12px; font-size: 16px;">Model Accuracy</h3>
+  <div class="model-cards" id="modelCards"></div>
+  <h3 style="margin-bottom: 8px; font-size: 16px;">Feature Importance Charts</h3>
+  <div class="chart-grid" id="chartGrid"></div>
+  <h3 style="margin-top: 24px; margin-bottom: 8px; font-size: 16px;">Feature Selection Report</h3>
+  <div class="report-block" id="reportBlock">No report available. Run feature selection first.</div>
+
+  <h3 style="margin-top: 32px; margin-bottom: 8px; font-size: 16px;">XGBoost Model Importance</h3>
+  <p style="font-size: 12px; color: var(--text2); margin-bottom: 12px;">Feature importances from the actual trained XGBoost models used for predictions.</p>
+  <div class="chart-grid" id="xgbChartGrid"></div>
+  <h3 style="margin-top: 24px; margin-bottom: 8px; font-size: 16px;">XGBoost Importance Report</h3>
+  <div class="report-block" id="xgbReportBlock">No report available. Click "Model Importance" to generate.</div>
+</div>
+
+<!-- Season Panel -->
+<div class="content season-panel" id="seasonPanel">
+  <!-- Init form (shown when no active season) -->
+  <div id="seasonInitSection">
+    <div class="season-init-form">
+      <h3>Start Season Tracking</h3>
+      <p>Enter your FPL Manager ID to import your season history and start receiving weekly recommendations.</p>
+      <input type="number" id="seasonManagerId" placeholder="Manager ID (e.g. 904686)">
+      <button class="btn btn-primary" style="width:100%" onclick="initSeason()">Start Season</button>
+      <button class="btn" style="width:100%;margin-top:8px" onclick="deleteSeason()">Delete Season Data</button>
+    </div>
+  </div>
+
+  <!-- Dashboard (shown when season is active) -->
+  <div id="seasonDashboard" style="display:none">
+    <div class="season-sub-tabs">
+      <button class="season-sub-tab active" data-section="overview" onclick="switchSeasonSection(this)">Overview</button>
+      <button class="season-sub-tab" data-section="workflow" onclick="switchSeasonSection(this)">Weekly Workflow</button>
+      <button class="season-sub-tab" data-section="fixtures" onclick="switchSeasonSection(this)">Fixtures</button>
+      <button class="season-sub-tab" data-section="transfers" onclick="switchSeasonSection(this)">Transfer History</button>
+      <button class="season-sub-tab" data-section="chips" onclick="switchSeasonSection(this)">Chips</button>
+      <button class="season-sub-tab" data-section="prices" onclick="switchSeasonSection(this)">Prices</button>
+    </div>
+
+    <!-- Overview Section -->
+    <div class="season-section visible" id="seasonOverview">
+      <div class="summary-cards" id="seasonSummaryCards"></div>
+      <div id="seasonTeamView"></div>
+      <div class="accuracy-stats" id="seasonAccuracy"></div>
+      <div class="season-chart-row">
+        <div class="season-chart-box"><h4>Overall Rank</h4><canvas id="rankChart" height="180"></canvas></div>
+        <div class="season-chart-box"><h4>Points per GW</h4><canvas id="pointsChart" height="180"></canvas></div>
+      </div>
+      <div class="season-chart-row">
+        <div class="season-chart-box"><h4>Budget Evolution</h4><canvas id="budgetChart" height="180"></canvas></div>
+      </div>
+    </div>
+
+    <!-- Weekly Workflow Section -->
+    <div class="season-section" id="seasonWorkflow">
+      <div class="workflow-actions">
+        <button class="btn btn-primary" onclick="generateRecommendation()">Generate Recommendation</button>
+        <button class="btn" onclick="recordResults()">Record Results</button>
+      </div>
+      <div id="recommendationDisplay"></div>
+      <div id="outcomeDisplay"></div>
+    </div>
+
+    <!-- Fixtures Section -->
+    <div class="season-section" id="seasonFixtures">
+      <div style="margin-bottom:12px">
+        <button class="btn" onclick="refreshFixtures()">Refresh Fixtures</button>
+      </div>
+      <div id="fixtureGridContainer"></div>
+    </div>
+
+    <!-- Transfer History Section -->
+    <div class="season-section" id="seasonTransfers">
+      <div id="transferHistoryContainer"></div>
+    </div>
+
+    <!-- Chips Section -->
+    <div class="season-section" id="seasonChips">
+      <div id="chipsContainer"></div>
+    </div>
+
+    <!-- Prices Section -->
+    <div class="season-section" id="seasonPrices">
+      <div style="margin-bottom:12px">
+        <button class="btn" onclick="updatePrices()">Update Prices</button>
+      </div>
+      <h4 style="margin-bottom:8px;font-size:14px">Price Alerts</h4>
+      <div id="priceAlertsContainer"></div>
+      <h4 style="margin:16px 0 8px;font-size:14px">Squad Prices</h4>
+      <div id="priceTableContainer"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+let players = [];
+let currentPosition = 'ALL';
+let currentSearch = '';
+let currentSort = 'predicted_next_gw_points';
+let sortAsc = false;
+let searchTimer = null;
+let taskRunning = false;
+let nextGW = null;
+let lastBestTeamResult = null;
+
+function getColumns() {
+  const gwLabel = nextGW ? `GW${nextGW}` : 'GW';
+  const gw3Label = nextGW ? `GW${nextGW}-${nextGW+2}` : '3GW';
+  return [
+    { key: 'web_name',                  label: 'Name',           fmt: 'text' },
+    { key: 'position',                  label: 'Pos',            fmt: 'pos' },
+    { key: 'team',                      label: 'Team',           fmt: 'text' },
+    { key: 'cost',                      label: 'Cost',           fmt: 'num1' },
+    { key: 'player_form',               label: 'Form',           fmt: 'num1' },
+    { key: 'event_points',              label: nextGW ? `Last GW (${nextGW-1})` : 'Last GW', fmt: 'num0' },
+    { key: 'total_points',              label: 'Total',            fmt: 'num0' },
+    { key: 'predicted_next_gw_points',  label: `Pred ${gwLabel}`,  fmt: 'num2' },
+    { key: 'predicted_next_3gw_points', label: `Pred ${gw3Label}`, fmt: 'num2' },
+    { key: 'fdr',                       label: 'FDR',            fmt: 'fdr' },
+    { key: 'is_home',                   label: 'H/A',            fmt: 'home' },
+    { key: 'ep_next',                   label: 'EP Next',        fmt: 'num1' },
+    { key: 'next_3_fixtures',           label: 'Next 3',         fmt: 'fixtures' },
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// SSE connection
+// ---------------------------------------------------------------------------
+function connectSSE() {
+  const es = new EventSource('/api/status');
+  es.onmessage = function(e) {
+    const d = JSON.parse(e.data);
+    const msg = d.message;
+    const evt = d.event;
+
+    document.getElementById('statusText').textContent = msg;
+
+    if (evt === 'task_start') {
+      setTaskRunning(true);
+    } else if (evt === 'task_done' || evt === 'task_error') {
+      setTaskRunning(false);
+      if (evt === 'task_done') {
+        // Reload predictions and model info
+        loadPredictions();
+        loadModelInfo();
+        loadFeatureReport();
+        loadXgbImportanceReport();
+        loadBacktestResults();
+        loadGWCompareResults();
+        // Reload season data if season tab is active
+        if (typeof seasonOnTaskDone === 'function') seasonOnTaskDone();
+      }
+    } else if (evt === 'progress') {
+      appendLog(msg);
+    }
+  };
+  es.onerror = function() {
+    document.getElementById('statusText').textContent = 'Disconnected — retrying...';
+    setTimeout(connectSSE, 3000);
+    es.close();
+  };
+}
+
+function setTaskRunning(running) {
+  taskRunning = running;
+  const dot = document.getElementById('statusDot');
+  const log = document.getElementById('progressLog');
+  const btns = [document.getElementById('btnRefresh'), document.getElementById('btnTrain'), document.getElementById('btnFeatures'), document.getElementById('btnXgbImportance')];
+
+  if (running) {
+    dot.classList.add('running');
+    log.classList.add('visible');
+    log.innerHTML = '';
+    btns.forEach(b => b.disabled = true);
+  } else {
+    dot.classList.remove('running');
+    btns.forEach(b => b.disabled = false);
+  }
+}
+
+function appendLog(msg) {
+  const log = document.getElementById('progressLog');
+  const line = document.createElement('div');
+  line.textContent = msg;
+  log.appendChild(line);
+  log.scrollTop = log.scrollHeight;
+}
+
+// ---------------------------------------------------------------------------
+// Actions
+// ---------------------------------------------------------------------------
+function refreshData() {
+  fetch('/api/refresh-data', { method: 'POST' }).then(r => r.json()).then(d => {
+    if (d.error) alert(d.error);
+  });
+}
+
+function trainModels() {
+  fetch('/api/train', { method: 'POST' }).then(r => r.json()).then(d => {
+    if (d.error) alert(d.error);
+  });
+}
+
+function runFeatureSelection() {
+  fetch('/api/feature-selection', { method: 'POST' }).then(r => r.json()).then(d => {
+    if (d.error) alert(d.error);
+  });
+}
+
+function runXgbImportance() {
+  fetch('/api/xgb-importance', { method: 'POST' }).then(r => r.json()).then(d => {
+    if (d.error) alert(d.error);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Load data
+// ---------------------------------------------------------------------------
+function loadPredictions() {
+  const params = new URLSearchParams();
+  if (currentPosition !== 'ALL') params.set('position', currentPosition);
+  if (currentSearch) params.set('search', currentSearch);
+  params.set('sort', currentSort);
+  params.set('dir', sortAsc ? 'asc' : 'desc');
+
+  fetch('/api/predictions?' + params).then(r => r.json()).then(d => {
+    if (d.error && d.players.length === 0) {
+      document.getElementById('tableWrap').innerHTML =
+        '<div class="empty-state"><h3>No Predictions Yet</h3><p>Click "Train Models" to generate predictions.</p></div>';
+      document.getElementById('playerCount').textContent = '';
+      return;
+    }
+    players = d.players;
+    renderTable();
+  });
+}
+
+function loadModelInfo() {
+  fetch('/api/model-info').then(r => r.json()).then(d => {
+    // GW badge
+    const gwBadge = document.getElementById('gwBadge');
+    if (d.next_gw) {
+      nextGW = d.next_gw;
+      gwBadge.textContent = `Predicting GW${nextGW}`;
+      gwBadge.style.color = 'var(--accent)';
+      // Update best-team dropdown labels
+      const sel = document.getElementById('targetSelect');
+      sel.options[0].text = `GW${nextGW} Points`;
+      sel.options[1].text = `GW${nextGW}-${nextGW+2} Points`;
+      // Re-render table if already loaded to update column headers
+      if (players.length) renderTable();
+    }
+
+    // Cache badge
+    const badge = document.getElementById('cacheBadge');
+    if (d.cache_age_seconds !== null) {
+      const hrs = (d.cache_age_seconds / 3600).toFixed(1);
+      const fresh = d.cache_age_seconds < d.cache_max_age_seconds;
+      badge.textContent = `Data: ${hrs}h ago`;
+      badge.className = 'cache-badge ' + (fresh ? 'fresh' : 'stale');
+    } else {
+      badge.textContent = 'No cached data';
+    }
+
+    // Model cards
+    const container = document.getElementById('modelCards');
+    container.innerHTML = '';
+    d.models.filter(m => m.target === 'next_gw_points').forEach(m => {
+      const card = document.createElement('div');
+      card.className = 'model-card';
+      if (m.exists) {
+        card.innerHTML = `<h4>${m.position} &mdash; Next GW</h4>
+          <div class="meta">Trained: ${m.trained_at}</div>
+          <div class="meta">Features: ${m.n_features}</div>`;
+      } else {
+        card.innerHTML = `<h4>${m.position} &mdash; Next GW</h4>
+          <div class="meta" style="color:var(--red)">Not trained</div>`;
+      }
+      container.appendChild(card);
+    });
+  });
+}
+
+function loadFeatureReport() {
+  fetch('/api/feature-report').then(r => r.json()).then(d => {
+    // Charts
+    const grid = document.getElementById('chartGrid');
+    grid.innerHTML = '';
+    if (d.charts && d.charts.length) {
+      d.charts.forEach(name => {
+        const img = document.createElement('img');
+        img.src = '/api/feature-charts/' + name;
+        img.alt = name;
+        img.loading = 'lazy';
+        grid.appendChild(img);
+      });
+    }
+
+    // Report text
+    const block = document.getElementById('reportBlock');
+    if (d.report) {
+      block.textContent = d.report;
+    } else {
+      block.textContent = d.error || 'No report available.';
+    }
+  });
+}
+
+function loadXgbImportanceReport() {
+  fetch('/api/xgb-importance-report').then(r => r.json()).then(d => {
+    // Charts
+    const grid = document.getElementById('xgbChartGrid');
+    grid.innerHTML = '';
+    if (d.charts && d.charts.length) {
+      d.charts.forEach(name => {
+        const img = document.createElement('img');
+        img.src = '/api/feature-charts/' + name;
+        img.alt = name;
+        img.loading = 'lazy';
+        grid.appendChild(img);
+      });
+    }
+
+    // Report text
+    const block = document.getElementById('xgbReportBlock');
+    if (d.report) {
+      block.textContent = d.report;
+    } else {
+      block.textContent = d.error || 'No report available. Click "Model Importance" to generate.';
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Table rendering
+// ---------------------------------------------------------------------------
+function renderTable() {
+  const cols = getColumns();
+  // Header
+  const thead = document.getElementById('tableHead');
+  thead.innerHTML = '';
+  const tr = document.createElement('tr');
+  cols.forEach(col => {
+    const th = document.createElement('th');
+    th.textContent = col.label;
+    th.dataset.key = col.key;
+    if (col.key === currentSort) {
+      th.classList.add('sorted');
+      const arrow = document.createElement('span');
+      arrow.className = 'sort-arrow';
+      arrow.textContent = sortAsc ? ' \u25B2' : ' \u25BC';
+      th.appendChild(arrow);
+    }
+    th.onclick = () => sortBy(col.key);
+    tr.appendChild(th);
+  });
+  thead.appendChild(tr);
+
+  // Body
+  const tbody = document.getElementById('tableBody');
+  tbody.innerHTML = '';
+
+  players.forEach(p => {
+    const row = document.createElement('tr');
+    cols.forEach(col => {
+      const td = document.createElement('td');
+      const val = p[col.key];
+      switch(col.fmt) {
+        case 'pos':
+          td.innerHTML = `<span class="pos-tag ${val || ''}">${val || '-'}</span>`;
+          break;
+        case 'fdr':
+          const fdrVal = Math.round(val || 3);
+          td.innerHTML = `<span class="fdr-cell fdr-${fdrVal}">${val != null ? val : '-'}</span>`;
+          break;
+        case 'home':
+          if (val == 1 || val === true) {
+            td.innerHTML = '<span class="home-badge home">H</span>';
+          } else {
+            td.innerHTML = '<span class="home-badge away">A</span>';
+          }
+          break;
+        case 'num0':
+          td.textContent = val != null ? Number(val).toFixed(0) : '-';
+          break;
+        case 'num1':
+          td.textContent = val != null ? Number(val).toFixed(1) : '-';
+          break;
+        case 'num2':
+          td.textContent = val != null ? Number(val).toFixed(2) : '-';
+          break;
+        case 'fixtures':
+          td.style.whiteSpace = 'nowrap';
+          td.style.fontSize = '12px';
+          td.textContent = val || '-';
+          break;
+        default:
+          td.textContent = val != null ? val : '-';
+      }
+      row.appendChild(td);
+    });
+    tbody.appendChild(row);
+  });
+
+  document.getElementById('playerCount').textContent = `${players.length} players`;
+}
+
+// ---------------------------------------------------------------------------
+// Interactions
+// ---------------------------------------------------------------------------
+function filterPosition(btn) {
+  document.querySelectorAll('.pos-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  currentPosition = btn.dataset.pos;
+  loadPredictions();
+}
+
+function debounceSearch() {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    currentSearch = document.getElementById('searchBox').value;
+    loadPredictions();
+  }, 250);
+}
+
+function sortBy(key) {
+  if (currentSort === key) {
+    sortAsc = !sortAsc;
+  } else {
+    currentSort = key;
+    sortAsc = false;
+  }
+  loadPredictions();
+}
+
+function switchTabByView(view) {
+  // Deselect all tabs (these views live in the action bar, not the tab row)
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  switchTab({dataset: {view}, classList: {add(){}, remove(){}}});
+}
+
+function switchTab(tab) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  if (tab.classList && tab.classList.add) tab.classList.add('active');
+
+  const view = tab.dataset.view;
+  document.getElementById('predictionsPanel').style.display = view === 'predictions' ? 'block' : 'none';
+
+  const insights = document.getElementById('insightsPanel');
+  if (view === 'insights') {
+    insights.classList.add('visible');
+    loadFeatureReport();
+    loadXgbImportanceReport();
+  } else {
+    insights.classList.remove('visible');
+  }
+
+  const bestTeam = document.getElementById('bestTeamPanel');
+  if (view === 'bestteam') {
+    bestTeam.classList.add('visible');
+  } else {
+    bestTeam.classList.remove('visible');
+  }
+
+  const backtest = document.getElementById('backtestPanel');
+  if (view === 'backtest') {
+    backtest.classList.add('visible');
+  } else {
+    backtest.classList.remove('visible');
+  }
+
+  const gwCompare = document.getElementById('gwComparePanel');
+  if (view === 'gwcompare') {
+    gwCompare.classList.add('visible');
+    loadLockInInfo();
+  } else {
+    gwCompare.classList.remove('visible');
+  }
+
+  const myTeam = document.getElementById('myTeamPanel');
+  if (view === 'myteam') {
+    myTeam.classList.add('visible');
+    const saved = localStorage.getItem('fpl_manager_id');
+    if (saved) document.getElementById('managerIdInput').value = saved;
+  } else {
+    myTeam.classList.remove('visible');
+  }
+
+  const seasonPanel = document.getElementById('seasonPanel');
+  if (view === 'season') {
+    seasonPanel.classList.add('visible');
+    const saved = localStorage.getItem('fpl_manager_id');
+    if (saved) document.getElementById('seasonManagerId').value = saved;
+    checkSeasonStatus();
+  } else {
+    seasonPanel.classList.remove('visible');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Best Team
+// ---------------------------------------------------------------------------
+function pickBestTeam() {
+  const budget = parseFloat(document.getElementById('budgetInput').value) || 100;
+  const target = document.getElementById('targetSelect').value;
+
+  lastBestTeamResult = null;
+  const lockBtn = document.getElementById('btnLockIn');
+  lockBtn.disabled = true;
+  lockBtn.textContent = 'Lock In This Team';
+
+  document.getElementById('squadDisplay').innerHTML = '<div class="empty-state"><p>Solving...</p></div>';
+  document.getElementById('teamSummary').innerHTML = '';
+
+  fetch('/api/best-team', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ budget, target }),
+  }).then(r => r.json()).then(d => {
+    if (d.error) {
+      document.getElementById('squadDisplay').innerHTML =
+        `<div class="empty-state"><h3>No Solution</h3><p>${d.error}</p></div>`;
+      return;
+    }
+
+    lastBestTeamResult = d;
+    lockBtn.disabled = false;
+
+    const gwLabel = nextGW ? `GW${nextGW}` : 'GW';
+    const gw3Label = nextGW ? `GW${nextGW}-${nextGW+2}` : '3GW';
+
+    // Summary with both targets
+    const summary = document.getElementById('teamSummary');
+    summary.innerHTML = `
+      <div class="summary-stat"><div class="label">XI Pred ${gwLabel}</div><div class="value">${d.starting_gw_points}</div></div>
+      <div class="summary-stat"><div class="label">XI Pred ${gw3Label}</div><div class="value">${d.starting_gw3_points}</div></div>
+      <div class="summary-stat"><div class="label">Total Cost</div><div class="value">${d.total_cost}</div></div>
+      <div class="summary-stat"><div class="label">Remaining</div><div class="value green">${d.remaining}</div></div>
+    `;
+
+    const starters = d.players.filter(p => p.starter);
+    const bench = d.players.filter(p => !p.starter);
+
+    const display = document.getElementById('squadDisplay');
+    display.innerHTML = '';
+
+    // Find captain (highest predicted points among starters)
+    const captainId = starters.reduce((best, p) =>
+      (p[target] || 0) > (best[target] || 0) ? p : best, starters[0]
+    ).player_id;
+
+    // Build pitch card HTML
+    function card(p) {
+      const pts = p[target] != null ? Number(p[target]).toFixed(1) : '-';
+      const fdrVal = Math.round(p.fdr || 3);
+      const opp = p.opponent || '';
+      const isCaptain = p.player_id === captainId;
+      const captainStyle = isCaptain ? 'border:2px solid #ef4444;box-shadow:0 0 8px rgba(239,68,68,0.4)' : '';
+      const captainBadge = isCaptain ? '<span style="color:#ef4444;font-weight:700;font-size:10px"> (C)</span>' : '';
+      return `<div class="pitch-card" style="${captainStyle}">
+        <div class="p-name">${p.web_name || '-'}${captainBadge}</div>
+        <div class="p-team">${p.team || ''} &middot; ${Number(p.cost).toFixed(1)}m</div>
+        <div class="p-pts">${pts}</div>
+        <span class="p-fdr fdr-${fdrVal}">${p.fdr != null ? p.fdr : '-'}</span>
+        <span style="font-size:10px;color:var(--text2);margin-left:4px">${opp}</span>
+      </div>`;
+    }
+
+    // Pitch
+    const fwd = starters.filter(p => p.position === 'FWD');
+    const mid = starters.filter(p => p.position === 'MID');
+    const def = starters.filter(p => p.position === 'DEF');
+    const gkp = starters.filter(p => p.position === 'GKP');
+
+    const pitch = document.createElement('div');
+    pitch.className = 'pitch';
+    pitch.innerHTML = `
+      <div class="pitch-bottom-box"></div>
+      <div class="pitch-row fwd">${fwd.map(card).join('')}</div>
+      <div class="pitch-row mid">${mid.map(card).join('')}</div>
+      <div class="pitch-row def">${def.map(card).join('')}</div>
+      <div class="pitch-row gkp">${gkp.map(card).join('')}</div>
+    `;
+    display.appendChild(pitch);
+
+    // Bench
+    if (bench.length) {
+      const benchArea = document.createElement('div');
+      benchArea.className = 'bench-area';
+      benchArea.innerHTML = `<div class="bench-label">Bench</div>
+        <div class="bench-row">${bench.map(p => {
+          const pts = p[target] != null ? Number(p[target]).toFixed(1) : '-';
+          return `<div class="bench-card">
+            <div class="p-name">${p.web_name || '-'}</div>
+            <div class="p-team">${p.team || ''} &middot; ${Number(p.cost).toFixed(1)}m</div>
+            <div class="p-pts">${pts}</div>
+          </div>`;
+        }).join('')}</div>`;
+      display.appendChild(benchArea);
+    }
+  });
+}
+
+function lockInTeam() {
+  if (!lastBestTeamResult || !nextGW) return;
+  const btn = document.getElementById('btnLockIn');
+  btn.disabled = true;
+  btn.textContent = 'Locking in...';
+
+  fetch('/api/lock-in-team', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      players: lastBestTeamResult.players,
+      budget: lastBestTeamResult.budget,
+      target: lastBestTeamResult.target,
+      season: '2025-2026',
+      gameweek: nextGW,
+    }),
+  }).then(r => r.json()).then(d => {
+    if (d.error) {
+      btn.textContent = 'Lock In This Team';
+      btn.disabled = false;
+      alert(d.error);
+    } else {
+      btn.textContent = `Locked for GW${nextGW}`;
+    }
+  }).catch(() => {
+    btn.textContent = 'Lock In This Team';
+    btn.disabled = false;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Backtest
+// ---------------------------------------------------------------------------
+function runBacktest() {
+  const startGW = parseInt(document.getElementById('btStartGW').value) || 5;
+  const endGW = parseInt(document.getElementById('btEndGW').value) || 25;
+  const multiSeason = document.getElementById('btMultiSeason').checked;
+
+  document.getElementById('btContent').innerHTML = '<div class="empty-state"><p>Running backtest...</p></div>';
+
+  const payload = { start_gw: startGW, end_gw: endGW };
+  if (multiSeason) {
+    payload.seasons = ['2024-2025', '2025-2026'];
+  }
+
+  fetch('/api/backtest', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  }).then(r => r.json()).then(d => {
+    if (d.error) alert(d.error);
+  });
+}
+
+function loadBacktestResults() {
+  fetch('/api/backtest-results').then(r => r.json()).then(d => {
+    if (d.error || !d.summary) return;
+
+    const s = d.summary;
+    const container = document.getElementById('btContent');
+    const isMultiSeason = s.seasons && s.seasons.length > 1;
+    let html = '';
+
+    // Helper to format CI
+    function ciText(ci) {
+      if (!ci || ci.length !== 2) return '';
+      return `<div style="font-size:10px;color:var(--text2);margin-top:2px">[${ci[0]}, ${ci[1]}]</div>`;
+    }
+
+    // --- Hero summary cards ---
+    html += '<div class="bt-summary">';
+    html += _btSumCard('Model Wins', `${s.model_wins}/${s.n_gameweeks}`, 'model', s.win_rate_ci);
+    html += _btSumCard('Model MAE', s.model_avg_mae, 'model', s.model_mae_ci);
+    html += _btSumCard('ep_next MAE', s.ep_avg_mae, 'ep', s.ep_mae_ci);
+    html += _btSumCard('Last 3 Avg MAE', s.last3_avg_mae != null ? s.last3_avg_mae : '-', 'form');
+    html += _btSumCard('Captain Top 3', `${Math.round(s.captain_hit_rate * 100)}%`, 'model');
+    html += _btSumCard('Capture %', `${s.model_capture_pct}%`, 'best', s.capture_pct_ci);
+    html += '</div>';
+
+    if (isMultiSeason) {
+      html += `<div style="font-size:12px;color:var(--text2);margin-bottom:12px">Seasons: ${s.seasons.join(', ')} &middot; ${s.n_gameweeks} gameweeks</div>`;
+    }
+
+    // --- Top 11 comparison cards ---
+    html += '<div class="bt-section-title">Average Top 11 Points Per Gameweek</div>';
+    html += '<div class="bt-comparison">';
+
+    const maxPts = s.actual_avg_top11_pts;
+    html += _btBarCard('Model', s.model_avg_top11_pts, maxPts, 'model', 'var(--accent)', s.model_top11_pts_ci);
+    html += _btBarCard('ep_next', s.ep_avg_top11_pts, maxPts, 'ep', 'var(--orange)');
+    html += _btBarCard('Last 3 Avg', s.last3_avg_top11_pts != null ? s.last3_avg_top11_pts : '-', maxPts, 'form', 'var(--yellow)');
+    html += _btBarCard('Form', s.form_avg_top11_pts, maxPts, 'form', 'var(--text2)');
+    html += _btBarCard('Actual Best', s.actual_avg_top11_pts, maxPts, 'best', 'var(--green)');
+    html += '</div>';
+
+    // --- Overlap cards ---
+    html += '<div class="bt-comparison">';
+    html += `<div class="bt-card">
+      <div class="bc-label">Avg Overlap with Actual Best 11</div>
+      <div class="bc-row"><span class="bc-name">Model</span><span class="bc-val model">${s.model_avg_overlap}/11</span></div>
+      <div class="bc-row"><span class="bc-name">ep_next</span><span class="bc-val ep">${s.ep_avg_overlap}/11</span></div>
+    </div>`;
+    html += `<div class="bt-card">
+      <div class="bc-label">Wins (Top 11 Points)</div>
+      <div class="bc-row"><span class="bc-name">Model</span><span class="bc-val model">${s.model_wins}</span></div>
+      <div class="bc-row"><span class="bc-name">ep_next</span><span class="bc-val ep">${s.ep_wins}</span></div>
+      <div class="bc-row"><span class="bc-name">Ties</span><span class="bc-val">${s.ties}</span></div>
+    </div>`;
+    html += '</div>';
+
+    // --- Per-GW table ---
+    html += '<div class="bt-section-title">Per-Gameweek Breakdown</div>';
+    html += '<div class="bt-table-wrap"><table class="bt-table"><thead><tr>';
+    if (isMultiSeason) html += '<th>Season</th>';
+    html += '<th>GW</th><th>Players</th>';
+    html += '<th>Model MAE</th><th>ep MAE</th><th>Form MAE</th><th>Last3 MAE</th>';
+    html += '<th>Model Top11</th><th>ep Top11</th><th>Last3 Top11</th><th>Best</th>';
+    html += '<th>Overlap</th>';
+    html += '<th>Captain</th><th>Cap Pts</th><th>Cap Rank</th>';
+    html += '<th>Winner</th>';
+    html += '</tr></thead><tbody>';
+
+    d.gameweeks.forEach(gw => {
+      const winClass = gw.winner === 'MODEL' ? 'bt-good' : gw.winner === 'ep_next' ? 'bt-bad' : '';
+      const capClass = gw.captain_in_top3 ? 'bt-good' : '';
+      html += '<tr>';
+      if (isMultiSeason) html += `<td style="font-size:11px;color:var(--text2)">${gw.season || ''}</td>`;
+      html += `
+        <td style="font-weight:600">GW${gw.gw}</td>
+        <td>${gw.n_players}</td>
+        <td class="bt-good">${gw.model_mae}</td>
+        <td>${gw.ep_mae}</td>
+        <td>${gw.form_mae}</td>
+        <td>${gw.last3_mae != null ? gw.last3_mae : '-'}</td>
+        <td style="font-weight:600">${gw.model_top11_pts}</td>
+        <td>${gw.ep_top11_pts}</td>
+        <td>${gw.last3_top11_pts != null ? gw.last3_top11_pts : '-'}</td>
+        <td style="color:var(--text2)">${gw.actual_best_pts}</td>
+        <td>${gw.model_overlap}/11</td>
+        <td>${gw.captain_name}</td>
+        <td class="${capClass}">${gw.captain_actual}</td>
+        <td>${gw.captain_actual_rank}</td>
+        <td class="${winClass}" style="font-weight:600">${gw.winner}</td>
+      </tr>`;
+    });
+
+    html += '</tbody></table></div>';
+
+    // --- Per-position breakdown ---
+    if (d.by_position && Object.keys(d.by_position).length) {
+      html += '<div class="bt-section-title">Per-Position Accuracy</div>';
+      html += '<div class="bt-pos-grid">';
+      for (const [pos, data] of Object.entries(d.by_position)) {
+        const posClass = pos;
+        const maeValues = [data.model_mae, data.ep_mae, data.form_mae];
+        if (data.last3_mae != null) maeValues.push(data.last3_mae);
+        const bestMAE = Math.min(...maeValues);
+        const pStr = data.mae_pvalue != null ? `p=${data.mae_pvalue}` : 'p=n/a';
+        const pColor = data.mae_pvalue != null && data.mae_pvalue < 0.05 ? 'var(--green)' : 'var(--text2)';
+        html += `<div class="bt-pos-card">
+          <h4><span class="pos-tag ${posClass}">${pos}</span> (avg ${data.avg_players} players)</h4>
+          <div class="bt-pos-row">
+            <span>Model MAE</span>
+            <span style="font-weight:700;color:${data.model_mae === bestMAE ? 'var(--green)' : 'var(--text)'}">${data.model_mae}</span>
+          </div>`;
+        if (data.model_mae_ci) {
+          html += `<div style="font-size:10px;color:var(--text2);text-align:right">[${data.model_mae_ci[0]}, ${data.model_mae_ci[1]}]</div>`;
+        }
+        html += `<div class="bt-pos-row">
+            <span>ep_next MAE</span>
+            <span style="font-weight:700;color:${data.ep_mae === bestMAE ? 'var(--green)' : 'var(--text)'}">${data.ep_mae}</span>
+          </div>`;
+        if (data.ep_mae_ci) {
+          html += `<div style="font-size:10px;color:var(--text2);text-align:right">[${data.ep_mae_ci[0]}, ${data.ep_mae_ci[1]}]</div>`;
+        }
+        html += `<div class="bt-pos-row">
+            <span>Form MAE</span>
+            <span style="font-weight:700;color:${data.form_mae === bestMAE ? 'var(--green)' : 'var(--text)'}">${data.form_mae}</span>
+          </div>`;
+        if (data.last3_mae != null) {
+          html += `<div class="bt-pos-row">
+            <span>Last 3 Avg MAE</span>
+            <span style="font-weight:700;color:${data.last3_mae === bestMAE ? 'var(--green)' : 'var(--text)'}">${data.last3_mae}</span>
+          </div>`;
+        }
+        html += `<div style="font-size:11px;color:${pColor};margin-top:6px;text-align:right">vs ep_next: ${pStr}</div>`;
+        html += '</div>';
+      }
+      html += '</div>';
+    }
+
+    // --- Note about methodology ---
+    html += `<div class="bt-note">
+      <strong>Methodology:</strong> For each gameweek, the model uses features from the previous GW
+      to predict points. Compares against three baselines: FPL's ep_next (official prediction),
+      naive Form (recent form stat), and Last 3 GW Avg (average of prior 3 gameweeks' actual points).
+      Top 11 = best 11 players by each method's ranking.
+      Captain = model's #1 pick; "Top 3" = whether that pick finished in the actual top 3 scorers.
+      Overlap = how many of the model's top 11 were in the actual highest-scoring 11.
+      95% confidence intervals shown in brackets [lower, upper] via bootstrap (10,000 resamples).
+    </div>`;
+
+    container.innerHTML = html;
+  });
+}
+
+function _btSumCard(label, value, cls, ci) {
+  let ciHtml = '';
+  if (ci && ci.length === 2) {
+    ciHtml = `<div style="font-size:10px;color:var(--text2);margin-top:1px">[${ci[0]}, ${ci[1]}]</div>`;
+  }
+  return `<div class="summary-stat"><div class="label">${label}</div><div class="value ${cls}">${value}</div>${ciHtml}</div>`;
+}
+
+function _btBarCard(name, pts, max, cls, color, ci) {
+  const ptsNum = typeof pts === 'number' ? pts : 0;
+  const pct = max > 0 ? Math.round((ptsNum / max) * 100) : 0;
+  let ciHtml = '';
+  if (ci && ci.length === 2) {
+    ciHtml = `<div style="font-size:10px;color:var(--text2)">[${ci[0]}, ${ci[1]}]</div>`;
+  }
+  return `<div class="bt-card">
+    <div class="bc-label">${name}</div>
+    <div class="bc-val ${cls}">${pts} pts</div>${ciHtml}
+    <div class="bt-bar"><div class="bt-bar-fill" style="width:${pct}%;background:${color}"></div></div>
+  </div>`;
+}
+
+// ---------------------------------------------------------------------------
+// GW Compare
+// ---------------------------------------------------------------------------
+function loadLockInInfo() {
+  const gw = parseInt(document.getElementById('cmpGW').value) || 0;
+  const infoSpan = document.getElementById('cmpLockInfo');
+  infoSpan.textContent = '';
+
+  fetch('/api/locked-teams').then(r => r.json()).then(d => {
+    const key = `2025-2026_GW${gw}`;
+    const entry = (d.teams || {})[key];
+    if (entry) {
+      infoSpan.style.color = 'var(--green)';
+      infoSpan.textContent = `Locked: budget ${entry.budget}m, ${entry.timestamp}`;
+    } else {
+      infoSpan.style.color = 'var(--text2)';
+      infoSpan.textContent = 'No lock-in for this GW';
+    }
+  });
+}
+
+function runGWCompare() {
+  const gameweek = parseInt(document.getElementById('cmpGW').value) || 10;
+
+  document.getElementById('cmpContent').innerHTML = '<div class="empty-state"><p>Running comparison...</p></div>';
+  document.getElementById('cmpSummary').innerHTML = '';
+
+  fetch('/api/gw-compare', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ season: '2025-2026', gameweek }),
+  }).then(r => r.json()).then(d => {
+    if (d.error) {
+      document.getElementById('cmpContent').innerHTML =
+        `<div class="empty-state"><h3>No Lock-In</h3><p>${d.error}</p></div>`;
+    }
+  });
+}
+
+function loadGWCompareResults() {
+  fetch('/api/gw-compare-results').then(r => r.json()).then(d => {
+    if (d.error || !d.model_team) return;
+
+    const overlapSet = new Set(d.overlap_player_ids || []);
+
+    // Summary cards
+    const summary = document.getElementById('cmpSummary');
+    summary.innerHTML = `
+      <div class="summary-stat"><div class="label">Season</div><div class="value" style="font-size:16px;color:var(--text)">${d.season}</div></div>
+      <div class="summary-stat"><div class="label">Gameweek</div><div class="value">${d.gameweek}</div></div>
+      <div class="summary-stat"><div class="label">Predicted Pts</div><div class="value model">${d.model_team.starting_predicted}</div></div>
+      <div class="summary-stat"><div class="label">Actual Pts</div><div class="value" style="color:var(--orange)">${d.model_team.starting_actual}</div></div>
+      <div class="summary-stat"><div class="label">Best Possible Pts</div><div class="value green">${d.actual_team.starting_actual}</div></div>
+      <div class="summary-stat"><div class="label">Capture %</div><div class="value" style="color:var(--yellow)">${d.model_capture_pct}%</div></div>
+      <div class="summary-stat"><div class="label">Overlap</div><div class="value" style="color:var(--yellow)">${d.overlap_count}/11</div></div>
+      <div class="summary-stat"><div class="label">Budget</div><div class="value" style="font-size:16px;color:var(--text2)">${d.budget}m</div></div>
+    `;
+
+    // Build dual pitches
+    function makeCard(p, showPred) {
+      const isOverlap = overlapSet.has(p.player_id);
+      const overlapClass = isOverlap ? ' overlap' : '';
+      const actual = p.actual != null ? Number(p.actual).toFixed(0) : '-';
+      const pred = p.predicted_next_gw_points != null ? Number(p.predicted_next_gw_points).toFixed(1) : '';
+      const predHtml = showPred && pred ? `<div class="p-pred">pred: ${pred}</div>` : '';
+      return `<div class="pitch-card${overlapClass}">
+        <div class="p-name">${p.web_name || '?'}</div>
+        <div class="p-team">${p.team || ''} &middot; ${Number(p.cost || 0).toFixed(1)}m</div>
+        <div class="p-pts">${actual}</div>
+        ${predHtml}
+      </div>`;
+    }
+
+    function buildPitch(starters, showPred) {
+      const fwd = starters.filter(p => p.position === 'FWD');
+      const mid = starters.filter(p => p.position === 'MID');
+      const def_ = starters.filter(p => p.position === 'DEF');
+      const gkp = starters.filter(p => p.position === 'GKP');
+      return `<div class="pitch">
+        <div class="pitch-bottom-box"></div>
+        <div class="pitch-row fwd">${fwd.map(p => makeCard(p, showPred)).join('')}</div>
+        <div class="pitch-row mid">${mid.map(p => makeCard(p, showPred)).join('')}</div>
+        <div class="pitch-row def">${def_.map(p => makeCard(p, showPred)).join('')}</div>
+        <div class="pitch-row gkp">${gkp.map(p => makeCard(p, showPred)).join('')}</div>
+      </div>`;
+    }
+
+    const container = document.getElementById('cmpContent');
+    container.innerHTML = `<div class="compare-pitches">
+      <div class="compare-side">
+        <h3 style="color:var(--accent)">Locked-In Team (${d.model_team.starting_actual} actual pts)</h3>
+        ${buildPitch(d.model_team.starters, true)}
+      </div>
+      <div class="compare-side">
+        <h3 style="color:var(--green)">Best Possible (${d.actual_team.starting_actual} pts)</h3>
+        ${buildPitch(d.actual_team.starters, false)}
+      </div>
+    </div>`;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// My Team
+// ---------------------------------------------------------------------------
+function importMyTeam() {
+  const managerId = document.getElementById('managerIdInput').value;
+  if (!managerId) { alert('Enter a Manager ID'); return; }
+  localStorage.setItem('fpl_manager_id', managerId);
+
+  document.getElementById('myTeamDisplay').innerHTML = '<div class="empty-state"><p>Loading squad...</p></div>';
+  document.getElementById('myTeamSummary').innerHTML = '';
+  document.getElementById('myTeamManagerInfo').textContent = '';
+
+  fetch(`/api/my-team?manager_id=${managerId}`).then(r => r.json()).then(d => {
+    if (d.error) {
+      document.getElementById('myTeamDisplay').innerHTML =
+        `<div class="empty-state"><h3>Error</h3><p>${d.error}</p></div>`;
+      return;
+    }
+    renderMyTeam(d);
+  }).catch(err => {
+    document.getElementById('myTeamDisplay').innerHTML =
+      `<div class="empty-state"><h3>Error</h3><p>${err.message}</p></div>`;
+  });
+}
+
+function renderMyTeam(d) {
+  // Store for transfer recommendations
+  lastMyTeamData = d;
+
+  // Show transfer section and set defaults
+  const transferSection = document.getElementById('transferSection');
+  transferSection.style.display = 'block';
+  document.getElementById('transferCount').value = d.free_transfers || 1;
+  document.getElementById('transferWildcard').checked = false;
+  document.getElementById('transferCount').disabled = false;
+  document.getElementById('transferResults').innerHTML = '';
+
+  // Update transfer target dropdown labels
+  if (d.next_gw) {
+    const tSel = document.getElementById('transferTarget');
+    tSel.options[0].text = `GW${d.next_gw} Points`;
+    tSel.options[1].text = `GW${d.next_gw}-${d.next_gw+2} Points`;
+  }
+
+  // Manager info
+  const info = document.getElementById('myTeamManagerInfo');
+  const mgr = d.manager;
+  info.innerHTML = `<strong>${mgr.team_name}</strong> &middot; ${mgr.name} &middot; Rank: ${(mgr.overall_rank || '-').toLocaleString()} &middot; Points: ${mgr.overall_points || '-'}`;
+
+  const gwLabel = d.next_gw ? `GW${d.next_gw}` : 'GW';
+  const gw3Label = d.next_gw ? `GW${d.next_gw}-${d.next_gw+2}` : '3GW';
+
+  // Summary stats
+  const summary = document.getElementById('myTeamSummary');
+  let chipHtml = '';
+  if (d.active_chip) {
+    chipHtml = `<div class="summary-stat"><div class="label">Active Chip</div><div class="value" style="color:var(--yellow)">${d.active_chip}</div></div>`;
+  }
+  const curGwLabel = d.current_event ? `GW${d.current_event}` : 'Current GW';
+  summary.innerHTML = `
+    <div class="summary-stat"><div class="label">XI Actual ${curGwLabel}</div><div class="value" style="color:var(--orange)">${d.xi_actual_gw}</div></div>
+    <div class="summary-stat"><div class="label">XI Pred ${gwLabel}</div><div class="value">${d.xi_pred_gw}</div></div>
+    <div class="summary-stat"><div class="label">XI Pred ${gw3Label}</div><div class="value">${d.xi_pred_3gw}</div></div>
+    <div class="summary-stat"><div class="label">Squad Value</div><div class="value" style="color:var(--text)">${d.squad_value}m</div></div>
+    <div class="summary-stat"><div class="label">Sell Value</div><div class="value" style="color:var(--text2)">${d.sell_value}m</div></div>
+    <div class="summary-stat"><div class="label">Bank</div><div class="value green">${d.bank}m</div></div>
+    <div class="summary-stat"><div class="label">Free Transfers</div><div class="value" style="color:var(--text)">${d.free_transfers}</div></div>
+    ${chipHtml}
+  `;
+
+  const starters = d.squad.filter(p => p.starter);
+  const bench = d.squad.filter(p => !p.starter);
+
+  function myTeamCard(p, mode) {
+    // mode: 'actual' = show event_points, 'predicted' = show predicted
+    const isActual = mode === 'actual';
+    const pts = isActual
+      ? (p.event_points != null ? Number(p.event_points).toFixed(0) : '-')
+      : (p.predicted_next_gw_points != null ? Number(p.predicted_next_gw_points).toFixed(1) : '-');
+    const ptsColor = isActual ? 'var(--orange)' : 'var(--green)';
+    const fdrVal = Math.round(p.fdr || 3);
+    const opp = p.opponent || '';
+
+    let extraClass = '';
+    let statusHtml = '';
+    if (p.status === 'i') {
+      extraClass = ' injured';
+      statusHtml = '<div class="p-avail injured">Injured</div>';
+    } else if (p.status === 's') {
+      extraClass = ' injured';
+      statusHtml = '<div class="p-avail injured">Suspended</div>';
+    } else if (p.chance_of_playing != null && p.chance_of_playing < 100) {
+      extraClass = ' doubtful';
+      statusHtml = `<div class="p-avail doubtful">${p.chance_of_playing}% chance</div>`;
+    }
+
+    let cardStyle = '';
+    let badge = '';
+    if (p.is_captain) {
+      cardStyle = 'border:2px solid #ef4444;box-shadow:0 0 8px rgba(239,68,68,0.4)';
+      badge = ' <span class="captain-badge">(C)</span>';
+    } else if (p.is_vice_captain) {
+      badge = ' <span class="vc-badge">(V)</span>';
+    }
+
+    const newsHtml = (!isActual && p.news) ? `<div class="p-news" title="${p.news}">${p.news}</div>` : '';
+
+    return `<div class="pitch-card${extraClass}" style="${cardStyle}">
+      <div class="p-name">${p.web_name || '-'}${badge}</div>
+      <div class="p-team">${p.team || ''} &middot; ${Number(p.cost).toFixed(1)}m</div>
+      <div class="p-pts" style="color:${ptsColor}">${pts}</div>
+      ${isActual ? '' : `<span class="p-fdr fdr-${fdrVal}">${p.fdr != null ? p.fdr : '-'}</span>
+      <span style="font-size:10px;color:var(--text2);margin-left:4px">${opp}</span>`}
+      ${statusHtml}${newsHtml}
+    </div>`;
+  }
+
+  function buildMyTeamPitch(players, mode) {
+    const fwd = players.filter(p => p.position === 'FWD');
+    const mid = players.filter(p => p.position === 'MID');
+    const def_ = players.filter(p => p.position === 'DEF');
+    const gkp = players.filter(p => p.position === 'GKP');
+    return `<div class="pitch">
+      <div class="pitch-bottom-box"></div>
+      <div class="pitch-row fwd">${fwd.map(p => myTeamCard(p, mode)).join('')}</div>
+      <div class="pitch-row mid">${mid.map(p => myTeamCard(p, mode)).join('')}</div>
+      <div class="pitch-row def">${def_.map(p => myTeamCard(p, mode)).join('')}</div>
+      <div class="pitch-row gkp">${gkp.map(p => myTeamCard(p, mode)).join('')}</div>
+    </div>`;
+  }
+
+  const display = document.getElementById('myTeamDisplay');
+  display.innerHTML = `<div class="compare-pitches">
+    <div class="compare-side">
+      <h3 style="color:var(--orange)">${curGwLabel} Actual (${d.xi_actual_gw} pts)</h3>
+      ${buildMyTeamPitch(starters, 'actual')}
+    </div>
+    <div class="compare-side">
+      <h3 style="color:var(--green)">Predicted ${gwLabel}</h3>
+      ${buildMyTeamPitch(starters, 'predicted')}
+    </div>
+  </div>`;
+
+  // Bench (show predicted points)
+  if (bench.length) {
+    const benchArea = document.createElement('div');
+    benchArea.className = 'bench-area';
+    benchArea.innerHTML = `<div class="bench-label">Bench</div>
+      <div class="bench-row">${bench.map(p => {
+        const actualPts = p.event_points != null ? Number(p.event_points).toFixed(0) : '-';
+        const predPts = p.predicted_next_gw_points != null ? Number(p.predicted_next_gw_points).toFixed(1) : '-';
+        let statusCls = '';
+        let statusText = '';
+        if (p.status === 'i') { statusCls = 'injured'; statusText = 'Injured'; }
+        else if (p.status === 's') { statusCls = 'injured'; statusText = 'Suspended'; }
+        else if (p.chance_of_playing != null && p.chance_of_playing < 100) { statusCls = 'doubtful'; statusText = p.chance_of_playing + '% chance'; }
+        const statusHtml = statusText ? `<div class="p-avail ${statusCls}" style="font-size:9px">${statusText}</div>` : '';
+        return `<div class="bench-card">
+          <div class="p-name">${p.web_name || '-'}</div>
+          <div class="p-team">${p.team || ''} &middot; ${Number(p.cost).toFixed(1)}m</div>
+          <div style="display:flex;gap:8px;justify-content:center">
+            <div class="p-pts" style="color:var(--orange);font-size:13px">${actualPts}</div>
+            <div style="color:var(--text2);font-size:13px">/</div>
+            <div class="p-pts" style="font-size:13px">${predPts}</div>
+          </div>
+          ${statusHtml}
+        </div>`;
+      }).join('')}</div>`;
+    display.appendChild(benchArea);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Transfer Recommendations
+// ---------------------------------------------------------------------------
+let lastMyTeamData = null;
+
+function toggleWildcard() {
+  const wc = document.getElementById('transferWildcard').checked;
+  const countInput = document.getElementById('transferCount');
+  if (wc) {
+    countInput.disabled = true;
+    countInput.value = '15';
+  } else {
+    countInput.disabled = false;
+    countInput.value = lastMyTeamData ? lastMyTeamData.free_transfers : 1;
+  }
+}
+
+function findTransfers() {
+  if (!lastMyTeamData) { alert('Import your squad first.'); return; }
+
+  const managerId = document.getElementById('managerIdInput').value;
+  const maxTransfers = parseInt(document.getElementById('transferCount').value) || 1;
+  const target = document.getElementById('transferTarget').value;
+  const wildcard = document.getElementById('transferWildcard').checked;
+
+  const btn = document.getElementById('btnFindTransfers');
+  btn.disabled = true;
+  btn.textContent = 'Solving...';
+  document.getElementById('transferResults').innerHTML = '<div class="empty-state"><p>Running solver...</p></div>';
+
+  fetch('/api/transfer-recommendations', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ manager_id: parseInt(managerId), max_transfers: maxTransfers, target, wildcard }),
+  }).then(r => r.json()).then(d => {
+    btn.disabled = false;
+    btn.textContent = 'Find Transfers';
+    if (d.error) {
+      document.getElementById('transferResults').innerHTML =
+        `<div class="empty-state"><h3>Error</h3><p>${d.error}</p></div>`;
+      return;
+    }
+    renderTransfers(d);
+  }).catch(err => {
+    btn.disabled = false;
+    btn.textContent = 'Find Transfers';
+    document.getElementById('transferResults').innerHTML =
+      `<div class="empty-state"><h3>Error</h3><p>${err.message}</p></div>`;
+  });
+}
+
+function renderTransfers(d) {
+  const container = document.getElementById('transferResults');
+  const target = d.target;
+  const gwLabel = d.next_gw ? `GW${d.next_gw}` : 'GW';
+  const newSigningIds = new Set(d.transfers_in_ids || []);
+
+  let html = '';
+
+  // Summary stats
+  const hitClass = d.points_hit > 0 ? 'style="color:var(--red)"' : '';
+  const netColor = d.net_gain > 0 ? 'green' : (d.net_gain < 0 ? 'style="color:var(--red)"' : '');
+  const netStyle = d.net_gain >= 0 ? 'class="value green"' : 'class="value" style="color:var(--red)"';
+
+  html += '<div class="team-summary">';
+  html += `<div class="summary-stat"><div class="label">Points Gained</div><div class="value green">+${d.points_gained}</div></div>`;
+  if (d.points_hit > 0) {
+    html += `<div class="summary-stat"><div class="label">Points Hit</div><div class="value" style="color:var(--red)">-${d.points_hit}</div></div>`;
+  }
+  html += `<div class="summary-stat"><div class="label">Net Gain</div><div ${netStyle}>${d.net_gain > 0 ? '+' : ''}${d.net_gain}</div></div>`;
+  html += `<div class="summary-stat"><div class="label">New XI Pred ${gwLabel}</div><div class="value">${d.new_xi_points}</div></div>`;
+  html += `<div class="summary-stat"><div class="label">Transfers</div><div class="value" style="color:var(--text)">${d.n_transfers}${d.wildcard ? ' (WC)' : ''}</div></div>`;
+  html += `<div class="summary-stat"><div class="label">Budget Remaining</div><div class="value green">${d.bank_after}m</div></div>`;
+  html += '</div>';
+
+  if (d.points_hit > 0 && !d.wildcard) {
+    html += `<div style="font-size:12px;color:var(--yellow);margin-bottom:12px">Using ${d.n_transfers} transfers with ${d.free_transfers} free — ${d.n_transfers - d.free_transfers} extra at 4pts each = ${d.points_hit}pt hit</div>`;
+  }
+
+  // Transfer cards
+  if (d.transfers_in.length > 0) {
+    html += '<div class="transfer-cards">';
+    for (let i = 0; i < d.transfers_in.length; i++) {
+      const inP = d.transfers_in[i];
+      const outP = d.transfers_out[i] || {};
+      const inPts = inP[target] != null ? Number(inP[target]).toFixed(1) : '-';
+      const outPts = outP[target] != null ? Number(outP[target]).toFixed(1) : '-';
+      const ptsDelta = (inP[target] || 0) - (outP[target] || 0);
+      const costDelta = (inP.cost || 0) - (outP.cost || 0);
+      const ptsColor = ptsDelta >= 0 ? 'var(--green)' : 'var(--red)';
+
+      html += `<div class="transfer-card">
+        <div class="transfer-side transfer-out">
+          <div class="ts-name">${outP.web_name || '?'}</div>
+          <div class="ts-meta">${outP.team || ''} &middot; ${outP.position || ''} &middot; ${Number(outP.cost || 0).toFixed(1)}m</div>
+          <div class="ts-pts">${outPts} pts</div>
+        </div>
+        <div class="transfer-arrow">&rarr;</div>
+        <div class="transfer-side transfer-in">
+          <div class="ts-name">${inP.web_name || '?'}</div>
+          <div class="ts-meta">${inP.team || ''} &middot; ${inP.position || ''} &middot; ${Number(inP.cost || 0).toFixed(1)}m</div>
+          <div class="ts-pts">${inPts} pts</div>
+        </div>
+        <div class="transfer-delta">
+          <div class="td-pts" style="color:${ptsColor}">${ptsDelta >= 0 ? '+' : ''}${ptsDelta.toFixed(1)}</div>
+          <div class="td-cost">${costDelta >= 0 ? '+' : ''}${costDelta.toFixed(1)}m</div>
+        </div>
+      </div>`;
+    }
+    html += '</div>';
+  } else {
+    html += '<div style="text-align:center;color:var(--text2);padding:20px">No beneficial transfers found — your squad is already optimal!</div>';
+  }
+
+  // New squad pitch
+  if (d.new_squad) {
+    const starters = d.new_squad.starters || [];
+    const bench = d.new_squad.bench || [];
+
+    const is3gw = target === 'predicted_next_3gw_points';
+
+    function transferCard(p) {
+      const pts = p[target] != null ? Number(p[target]).toFixed(1) : '-';
+      const fdrVal = Math.round(p.fdr || 3);
+      const opp = p.opponent || '';
+      const fixtures3 = p.next_3_fixtures || '';
+      const isNew = newSigningIds.has(p.player_id);
+      const newClass = isNew ? ' new-signing' : '';
+      const fixtureHtml = is3gw
+        ? `<div style="font-size:9px;color:var(--text2);margin-top:2px">${fixtures3}</div>`
+        : `<span class="p-fdr fdr-${fdrVal}">${p.fdr != null ? p.fdr : '-'}</span>
+           <div style="font-size:9px;color:var(--text2);margin-top:2px">${fixtures3}</div>`;
+      return `<div class="pitch-card${newClass}">
+        <div class="p-name">${p.web_name || '-'}</div>
+        <div class="p-team">${p.team || ''} &middot; ${Number(p.cost).toFixed(1)}m</div>
+        <div class="p-pts">${pts}</div>
+        ${fixtureHtml}
+      </div>`;
+    }
+
+    const fwd = starters.filter(p => p.position === 'FWD');
+    const mid = starters.filter(p => p.position === 'MID');
+    const def_ = starters.filter(p => p.position === 'DEF');
+    const gkp = starters.filter(p => p.position === 'GKP');
+
+    html += `<h3 style="text-align:center;font-size:15px;margin:20px 0 10px;color:var(--text2)">New Squad <span style="color:var(--green)">(green = new signing)</span></h3>`;
+    html += `<div class="pitch" style="max-width:720px;margin:0 auto">
+      <div class="pitch-bottom-box"></div>
+      <div class="pitch-row fwd">${fwd.map(transferCard).join('')}</div>
+      <div class="pitch-row mid">${mid.map(transferCard).join('')}</div>
+      <div class="pitch-row def">${def_.map(transferCard).join('')}</div>
+      <div class="pitch-row gkp">${gkp.map(transferCard).join('')}</div>
+    </div>`;
+
+    // Bench
+    if (bench.length) {
+      html += `<div class="bench-area"><div class="bench-label">Bench</div>
+        <div class="bench-row">${bench.map(p => {
+          const pts = p[target] != null ? Number(p[target]).toFixed(1) : '-';
+          const isNew = newSigningIds.has(p.player_id);
+          const borderStyle = isNew ? 'border:1px solid var(--green)' : '';
+          return `<div class="bench-card" style="${borderStyle}">
+            <div class="p-name">${p.web_name || '-'}</div>
+            <div class="p-team">${p.team || ''} &middot; ${Number(p.cost).toFixed(1)}m</div>
+            <div class="p-pts">${pts}</div>
+          </div>`;
+        }).join('')}</div></div>`;
+    }
+  }
+
+  html += `<div style="font-size:11px;color:var(--text2);margin-top:16px;padding:10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;max-width:720px;margin-left:auto;margin-right:auto">
+    Note: Selling prices are approximate — actual budget may vary slightly for players who have risen in price since you bought them.
+  </div>`;
+
+  container.innerHTML = html;
+}
+
+// ---------------------------------------------------------------------------
+// Season Management
+// ---------------------------------------------------------------------------
+
+function getSeasonManagerId() {
+  return document.getElementById('seasonManagerId').value || localStorage.getItem('fpl_manager_id') || '';
+}
+
+function checkSeasonStatus() {
+  const mid = getSeasonManagerId();
+  if (!mid) return;
+  fetch(`/api/season/status?manager_id=${mid}`)
+    .then(r => r.json())
+    .then(d => {
+      if (d.active) {
+        document.getElementById('seasonInitSection').style.display = 'none';
+        document.getElementById('seasonDashboard').style.display = 'block';
+        loadSeasonDashboard();
+      } else {
+        document.getElementById('seasonInitSection').style.display = 'block';
+        document.getElementById('seasonDashboard').style.display = 'none';
+      }
+    });
+}
+
+function initSeason() {
+  const mid = getSeasonManagerId();
+  if (!mid) return alert('Enter a Manager ID');
+  localStorage.setItem('fpl_manager_id', mid);
+  fetch('/api/season/init', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({manager_id: parseInt(mid)}),
+  }).then(r => r.json()).then(d => {
+    if (d.error) return alert(d.error);
+    // Will check status after task completes (SSE handler)
+  });
+}
+
+function deleteSeason() {
+  const mid = getSeasonManagerId();
+  if (!mid) return;
+  if (!confirm('Delete all season data for this manager?')) return;
+  fetch('/api/season/delete', {
+    method: 'DELETE',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({manager_id: parseInt(mid)}),
+  }).then(r => r.json()).then(() => {
+    document.getElementById('seasonInitSection').style.display = 'block';
+    document.getElementById('seasonDashboard').style.display = 'none';
+  });
+}
+
+function switchSeasonSection(btn) {
+  document.querySelectorAll('.season-sub-tab').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const section = btn.dataset.section;
+  document.querySelectorAll('.season-section').forEach(s => s.classList.remove('visible'));
+  const sectionMap = {
+    overview: 'seasonOverview',
+    workflow: 'seasonWorkflow',
+    fixtures: 'seasonFixtures',
+    transfers: 'seasonTransfers',
+    chips: 'seasonChips',
+    prices: 'seasonPrices',
+  };
+  const el = document.getElementById(sectionMap[section]);
+  if (el) el.classList.add('visible');
+
+  // Load data for section
+  if (section === 'fixtures') loadFixtures();
+  if (section === 'transfers') loadTransferHistory();
+  if (section === 'chips') loadChips();
+  if (section === 'prices') loadPrices();
+}
+
+function loadSeasonDashboard() {
+  const mid = getSeasonManagerId();
+  if (!mid) return;
+  fetch(`/api/season/dashboard?manager_id=${mid}`)
+    .then(r => r.json())
+    .then(d => {
+      if (d.error) return;
+      renderSeasonOverview(d);
+    });
+  // Also load team view
+  fetch(`/api/my-team?manager_id=${mid}`)
+    .then(r => r.json())
+    .then(d => {
+      if (d.error || !d.squad) return;
+      renderSeasonTeamView(d);
+    });
+}
+
+function renderSeasonOverview(data) {
+  const s = data.summary || {};
+  const cards = document.getElementById('seasonSummaryCards');
+  cards.innerHTML = `
+    <div class="summary-card"><div class="sc-label">Overall Rank</div><div class="sc-value">${s.overall_rank ? s.overall_rank.toLocaleString() : '-'}</div></div>
+    <div class="summary-card"><div class="sc-label">Total Points</div><div class="sc-value accent">${s.total_points ?? '-'}</div></div>
+    <div class="summary-card"><div class="sc-label">Team Value</div><div class="sc-value">${s.team_value ? s.team_value.toFixed(1) + 'm' : '-'}</div></div>
+    <div class="summary-card"><div class="sc-label">Bank</div><div class="sc-value green">${s.bank != null ? s.bank.toFixed(1) + 'm' : '-'}</div></div>
+    <div class="summary-card"><div class="sc-label">Gameweek</div><div class="sc-value">${s.gameweek ?? '-'}</div></div>
+  `;
+
+  // Accuracy stats
+  const acc = data.accuracy || {};
+  const accDiv = document.getElementById('seasonAccuracy');
+  if (acc.total > 0) {
+    accDiv.innerHTML = `
+      <div class="summary-card"><div class="sc-label">Recommendations</div><div class="sc-value">${acc.total}</div></div>
+      <div class="summary-card"><div class="sc-label">Captain Followed</div><div class="sc-value">${acc.captain_followed || 0}/${acc.total}</div></div>
+      <div class="summary-card"><div class="sc-label">Avg Point Delta</div><div class="sc-value">${acc.avg_delta != null ? acc.avg_delta.toFixed(1) : '-'}</div></div>
+    `;
+  } else {
+    accDiv.innerHTML = '';
+  }
+
+  // Charts
+  drawLineChart('rankChart', data.rank_history || [], 'gameweek', 'overall_rank', {
+    invert: true, color: '#6c63ff', label: 'Rank'
+  });
+  drawBarChart('pointsChart', data.points_per_gw || [], 'gameweek', 'points', {
+    color: '#2dd4a0', label: 'Points'
+  });
+  drawLineChart('budgetChart', data.budget_history || [], 'gameweek', 'total_value', {
+    color: '#fbbf24', label: 'Total Value', decimals: 1
+  });
+}
+
+function renderSeasonTeamView(d) {
+  const container = document.getElementById('seasonTeamView');
+  const starters = d.squad.filter(p => p.starter);
+  const bench = d.squad.filter(p => !p.starter);
+  const curGw = d.current_event || '?';
+  const gwLabel = d.next_gw ? `GW${d.next_gw}` : 'Next GW';
+
+  // Total starter points this GW
+  const xiActual = starters.reduce((s, p) => s + (p.event_points || 0), 0);
+  const xiPred = starters.reduce((s, p) => s + (p.predicted_next_gw_points || 0), 0);
+
+  function teamCard(p, mode) {
+    const isActual = mode === 'actual';
+    const pts = isActual
+      ? (p.event_points != null ? Number(p.event_points).toFixed(0) : '-')
+      : (p.predicted_next_gw_points != null ? Number(p.predicted_next_gw_points).toFixed(1) : '-');
+    const ptsColor = isActual ? 'var(--orange)' : 'var(--green)';
+
+    let badge = '';
+    let cardStyle = '';
+    if (p.is_captain) {
+      cardStyle = 'border:2px solid #ef4444;box-shadow:0 0 8px rgba(239,68,68,0.4)';
+      badge = ' <span class="captain-badge">(C)</span>';
+    } else if (p.is_vice_captain) {
+      badge = ' <span class="vc-badge">(V)</span>';
+    }
+
+    let extraClass = '';
+    let statusHtml = '';
+    if (p.status === 'i') {
+      extraClass = ' injured';
+      statusHtml = '<div class="p-avail injured">Injured</div>';
+    } else if (p.status === 's') {
+      extraClass = ' injured';
+      statusHtml = '<div class="p-avail injured">Suspended</div>';
+    } else if (p.chance_of_playing != null && p.chance_of_playing < 100) {
+      extraClass = ' doubtful';
+      statusHtml = `<div class="p-avail doubtful">${p.chance_of_playing}%</div>`;
+    }
+
+    return `<div class="pitch-card${extraClass}" style="${cardStyle}">
+      <div class="p-name">${p.web_name || '-'}${badge}</div>
+      <div class="p-team">${p.team || ''} &middot; ${Number(p.cost).toFixed(1)}m</div>
+      <div class="p-pts" style="color:${ptsColor}">${pts}</div>
+      ${!isActual && p.opponent ? `<span style="font-size:10px;color:var(--text2)">${p.opponent}</span>` : ''}
+      ${statusHtml}
+    </div>`;
+  }
+
+  function buildPitch(players, mode) {
+    const fwd = players.filter(p => p.position === 'FWD');
+    const mid = players.filter(p => p.position === 'MID');
+    const def_ = players.filter(p => p.position === 'DEF');
+    const gkp = players.filter(p => p.position === 'GKP');
+    return `<div class="pitch">
+      <div class="pitch-bottom-box"></div>
+      <div class="pitch-row fwd">${fwd.map(p => teamCard(p, mode)).join('')}</div>
+      <div class="pitch-row mid">${mid.map(p => teamCard(p, mode)).join('')}</div>
+      <div class="pitch-row def">${def_.map(p => teamCard(p, mode)).join('')}</div>
+      <div class="pitch-row gkp">${gkp.map(p => teamCard(p, mode)).join('')}</div>
+    </div>`;
+  }
+
+  let html = `<div style="margin-bottom:20px">
+    <div class="compare-pitches">
+      <div class="compare-side">
+        <h3 style="color:var(--orange)">GW${curGw} Actual (${xiActual} pts)</h3>
+        ${buildPitch(starters, 'actual')}
+      </div>
+      <div class="compare-side">
+        <h3 style="color:var(--green)">Predicted ${gwLabel} (${xiPred.toFixed(1)} pts)</h3>
+        ${buildPitch(starters, 'predicted')}
+      </div>
+    </div>`;
+
+  // Bench
+  if (bench.length) {
+    html += `<div class="bench-area"><div class="bench-label">Bench</div>
+      <div class="bench-row">${bench.map(p => {
+        const actual = p.event_points != null ? Number(p.event_points).toFixed(0) : '-';
+        const pred = p.predicted_next_gw_points != null ? Number(p.predicted_next_gw_points).toFixed(1) : '-';
+        return `<div class="bench-card">
+          <div class="p-name">${p.web_name || '-'}</div>
+          <div class="p-team">${p.team || ''} &middot; ${Number(p.cost).toFixed(1)}m</div>
+          <div style="display:flex;gap:8px;justify-content:center">
+            <div class="p-pts" style="color:var(--orange);font-size:13px">${actual}</div>
+            <div style="color:var(--text2);font-size:13px">/</div>
+            <div class="p-pts" style="font-size:13px">${pred}</div>
+          </div>
+        </div>`;
+      }).join('')}</div></div>`;
+  }
+
+  html += '</div>';
+  container.innerHTML = html;
+}
+
+// --- Canvas Chart Helpers ---
+
+function drawLineChart(canvasId, data, xKey, yKey, opts = {}) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas || !data.length) return;
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.parentElement.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = 180 * dpr;
+  canvas.style.width = rect.width + 'px';
+  canvas.style.height = '180px';
+  ctx.scale(dpr, dpr);
+  const W = rect.width, H = 180;
+  const pad = {top: 10, right: 10, bottom: 25, left: 50};
+
+  const xs = data.map(d => d[xKey]);
+  const ys = data.map(d => d[yKey]).filter(v => v != null);
+  if (!ys.length) return;
+
+  let yMin = Math.min(...ys), yMax = Math.max(...ys);
+  if (yMin === yMax) { yMin -= 1; yMax += 1; }
+  const chartW = W - pad.left - pad.right;
+  const chartH = H - pad.top - pad.bottom;
+
+  ctx.clearRect(0, 0, W, H);
+
+  // Grid
+  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = pad.top + (chartH / 4) * i;
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W - pad.right, y); ctx.stroke();
+    let val = opts.invert ? yMin + ((yMax - yMin) / 4) * i : yMax - ((yMax - yMin) / 4) * i;
+    ctx.fillStyle = '#8e91a4';
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'right';
+    const label = opts.decimals ? val.toFixed(opts.decimals) : Math.round(val).toLocaleString();
+    ctx.fillText(label, pad.left - 6, y + 3);
+  }
+
+  // Line
+  ctx.strokeStyle = opts.color || '#6c63ff';
+  ctx.lineWidth = 2;
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  data.forEach((d, i) => {
+    if (d[yKey] == null) return;
+    const x = pad.left + (i / Math.max(data.length - 1, 1)) * chartW;
+    const norm = opts.invert
+      ? (d[yKey] - yMin) / (yMax - yMin)
+      : 1 - (d[yKey] - yMin) / (yMax - yMin);
+    const y = pad.top + norm * chartH;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  // X-axis labels
+  ctx.fillStyle = '#8e91a4';
+  ctx.font = '10px sans-serif';
+  ctx.textAlign = 'center';
+  const step = Math.max(1, Math.floor(data.length / 8));
+  data.forEach((d, i) => {
+    if (i % step === 0 || i === data.length - 1) {
+      const x = pad.left + (i / Math.max(data.length - 1, 1)) * chartW;
+      ctx.fillText('GW' + d[xKey], x, H - 4);
+    }
+  });
+}
+
+function drawBarChart(canvasId, data, xKey, yKey, opts = {}) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas || !data.length) return;
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.parentElement.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = 180 * dpr;
+  canvas.style.width = rect.width + 'px';
+  canvas.style.height = '180px';
+  ctx.scale(dpr, dpr);
+  const W = rect.width, H = 180;
+  const pad = {top: 10, right: 10, bottom: 25, left: 40};
+
+  const ys = data.map(d => d[yKey] || 0);
+  const yMax = Math.max(...ys, 1);
+  const chartW = W - pad.left - pad.right;
+  const chartH = H - pad.top - pad.bottom;
+  const barW = Math.max(2, (chartW / data.length) * 0.7);
+  const gap = chartW / data.length;
+
+  ctx.clearRect(0, 0, W, H);
+
+  // Bars
+  data.forEach((d, i) => {
+    const val = d[yKey] || 0;
+    const barH = (val / yMax) * chartH;
+    const x = pad.left + i * gap + (gap - barW) / 2;
+    const y = pad.top + chartH - barH;
+    ctx.fillStyle = opts.color || '#2dd4a0';
+    ctx.fillRect(x, y, barW, barH);
+  });
+
+  // Axes
+  ctx.fillStyle = '#8e91a4';
+  ctx.font = '10px sans-serif';
+  ctx.textAlign = 'center';
+  const step = Math.max(1, Math.floor(data.length / 8));
+  data.forEach((d, i) => {
+    if (i % step === 0 || i === data.length - 1) {
+      const x = pad.left + i * gap + gap / 2;
+      ctx.fillText('GW' + d[xKey], x, H - 4);
+    }
+  });
+  ctx.textAlign = 'right';
+  for (let i = 0; i <= 3; i++) {
+    const y = pad.top + (chartH / 3) * i;
+    const val = Math.round(yMax - (yMax / 3) * i);
+    ctx.fillText(val, pad.left - 6, y + 3);
+  }
+}
+
+// --- Weekly Workflow ---
+
+function generateRecommendation() {
+  const mid = getSeasonManagerId();
+  if (!mid) return;
+  document.getElementById('recommendationDisplay').innerHTML = '<div class="empty-state"><p>Generating...</p></div>';
+  fetch('/api/season/generate-recommendation', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({manager_id: parseInt(mid)}),
+  }).then(r => r.json()).then(d => {
+    if (d.error) return alert(d.error);
+    // Results loaded after task_done SSE
+  });
+}
+
+function recordResults() {
+  const mid = getSeasonManagerId();
+  if (!mid) return;
+  document.getElementById('outcomeDisplay').innerHTML = '<div class="empty-state"><p>Recording...</p></div>';
+  fetch('/api/season/record-results', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({manager_id: parseInt(mid)}),
+  }).then(r => r.json()).then(d => {
+    if (d.error) return alert(d.error);
+  });
+}
+
+function loadLatestRecommendation() {
+  const mid = getSeasonManagerId();
+  if (!mid) return;
+  fetch(`/api/season/recommendations?manager_id=${mid}`)
+    .then(r => r.json())
+    .then(d => {
+      const recs = d.recommendations || [];
+      if (!recs.length) {
+        document.getElementById('recommendationDisplay').innerHTML =
+          '<div class="empty-state"><p>No recommendations yet. Click "Generate Recommendation" before the next deadline.</p></div>';
+        return;
+      }
+      const latest = recs[recs.length - 1];
+      renderRecommendation(latest);
+    });
+}
+
+function recPlayerBadge(p, type) {
+  if (!p || !p.web_name) return '<div style="min-width:140px"></div>';
+  const borderColor = type === 'out' ? 'var(--red)' : 'var(--green)';
+  const pred = p.predicted_next_gw_points != null ? Number(p.predicted_next_gw_points).toFixed(1) : '-';
+  const pred3 = p.predicted_next_3gw_points != null ? Number(p.predicted_next_3gw_points).toFixed(1) : '-';
+  const lastGw = p.event_points != null ? p.event_points : '-';
+  const total = p.total_points != null ? p.total_points : '-';
+  const cost = p.cost != null ? Number(p.cost).toFixed(1) : '-';
+  const posClass = p.position || '';
+  return `<div style="background:var(--surface);border:2px solid ${borderColor};border-radius:8px;padding:10px 14px;min-width:160px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+      <span style="font-weight:700;font-size:14px">${p.web_name}</span>
+      <span class="pos-tag ${posClass}" style="font-size:10px">${posClass}</span>
+    </div>
+    <div style="font-size:11px;color:var(--text2);margin-bottom:6px">${p.team || ''} &middot; ${cost}m</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 12px;font-size:12px">
+      <div style="color:var(--text2)">Last GW</div><div style="text-align:right;font-weight:600;color:var(--orange)">${lastGw}</div>
+      <div style="color:var(--text2)">Pred GW</div><div style="text-align:right;font-weight:600;color:var(--green)">${pred}</div>
+      <div style="color:var(--text2)">Pred 3GW</div><div style="text-align:right;font-weight:600">${pred3}</div>
+      <div style="color:var(--text2)">Season</div><div style="text-align:right">${total}</div>
+    </div>
+  </div>`;
+}
+
+function renderRecommendation(rec) {
+  let transfers = [];
+  try { transfers = JSON.parse(rec.transfers_json || '[]'); } catch(e) {}
+  let chipValues = {};
+  try { chipValues = JSON.parse(rec.chip_values_json || '{}'); } catch(e) {}
+  let bankAnalysis = {};
+  try { bankAnalysis = JSON.parse(rec.bank_analysis_json || '{}'); } catch(e) {}
+
+  let html = `<div class="rec-card"><h4>GW${rec.gameweek} Recommendation</h4>`;
+
+  // Transfers — new format: array of {out, in} pairs
+  // Also support old format: array of {direction, ...} objects
+  const hasPairs = transfers.length > 0 && transfers[0].out !== undefined;
+
+  if (hasPairs && transfers.length) {
+    html += '<div style="display:flex;flex-direction:column;gap:12px;margin-bottom:12px">';
+    for (const pair of transfers) {
+      html += `<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        ${recPlayerBadge(pair.out, 'out')}
+        <div style="font-size:20px;color:var(--text2)">&rarr;</div>
+        ${recPlayerBadge(pair.in, 'in')}
+      </div>`;
+    }
+    html += '</div>';
+  } else if (!hasPairs) {
+    // Old format fallback
+    const inT = transfers.filter(t => t.direction === 'in');
+    const outT = transfers.filter(t => t.direction === 'out');
+    if (inT.length || outT.length) {
+      html += '<div style="display:flex;flex-direction:column;gap:12px;margin-bottom:12px">';
+      const maxLen = Math.max(inT.length, outT.length);
+      for (let i = 0; i < maxLen; i++) {
+        html += `<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          ${recPlayerBadge(outT[i], 'out')}
+          <div style="font-size:20px;color:var(--text2)">&rarr;</div>
+          ${recPlayerBadge(inT[i], 'in')}
+        </div>`;
+      }
+      html += '</div>';
+    } else {
+      html += '<p style="color:var(--text2);font-size:13px;margin-bottom:12px">No transfers recommended (bank your FT)</p>';
+    }
+  } else {
+    html += '<p style="color:var(--text2);font-size:13px;margin-bottom:12px">No transfers recommended (bank your FT)</p>';
+  }
+
+  // Captain
+  html += `<div style="margin-bottom:10px;padding:8px 14px;background:var(--surface);border:2px solid #ef4444;border-radius:8px;display:inline-block">
+    <span style="font-size:13px;color:var(--text2)">Captain:</span>
+    <strong style="margin-left:6px;font-size:15px">${rec.captain_name || '-'}</strong>
+  </div>`;
+
+  // Chip suggestion
+  if (rec.chip_suggestion) {
+    html += `<div style="margin:8px 0;padding:8px 14px;background:rgba(45,212,160,0.1);border:1px solid var(--green);border-radius:8px;display:inline-block;margin-left:8px">
+      <span style="font-size:13px;color:var(--green);font-weight:600">Play ${rec.chip_suggestion}</span>
+    </div>`;
+  }
+
+  // Chip values
+  if (Object.keys(chipValues).length) {
+    html += '<div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">';
+    for (const [chip, val] of Object.entries(chipValues)) {
+      const label = {wildcard:'Wildcard',freehit:'Free Hit',bboost:'Bench Boost','3xc':'Triple Captain'}[chip] || chip;
+      html += `<span style="font-size:12px;padding:4px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:6px">${label}: <strong style="color:var(--accent)">+${val}</strong> pts</span>`;
+    }
+    html += '</div>';
+  }
+
+  // Bank analysis (multi-week lookahead)
+  if (bankAnalysis.recommendation) {
+    const strats = bankAnalysis.strategies || [];
+    const best = bankAnalysis.best_strategy || {};
+    const bestUse = best.use_this_week;
+    let recLabel;
+    if (bestUse === 0) recLabel = 'Bank your FT';
+    else if (bestUse === 1) recLabel = 'Use 1 FT';
+    else recLabel = `Use ${bestUse} FTs`;
+
+    html += `<div style="margin-top:12px;padding:12px 14px;background:var(--surface);border:1px solid var(--border);border-radius:8px">
+      <div style="font-size:14px;font-weight:600;margin-bottom:8px">2-Week Lookahead</div>
+      <div style="margin-bottom:8px">
+        <span style="font-size:13px">Best strategy:</span>
+        <span style="color:var(--accent);font-weight:700;font-size:14px;margin-left:6px">${recLabel}</span>
+        <span style="color:var(--text2);font-size:12px;margin-left:6px">(${best.total_2week?.toFixed(1) || '-'} pts over 2 weeks)</span>
+      </div>`;
+
+    if (strats.length > 1) {
+      html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px">';
+      for (const s of strats) {
+        const isBest = s.use_this_week === bestUse;
+        const border = isBest ? 'border-color:var(--accent)' : '';
+        const label = s.use_this_week === 0 ? 'Bank' : `Use ${s.use_this_week} FT${s.use_this_week > 1 ? 's' : ''}`;
+        html += `<div style="padding:8px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;${border}">
+          <div style="font-weight:600;font-size:13px;margin-bottom:4px">${label}${isBest ? ' *' : ''}</div>
+          <div style="font-size:12px;display:grid;grid-template-columns:1fr 1fr;gap:1px 8px">
+            <span style="color:var(--text2)">This GW</span><span style="text-align:right">${s.week1_points?.toFixed(1)}</span>
+            <span style="color:var(--text2)">Next GW</span><span style="text-align:right">${s.week2_points?.toFixed(1)}</span>
+            <span style="color:var(--text2)">Total</span><span style="text-align:right;font-weight:700;color:${isBest ? 'var(--green)' : 'var(--text)'}">${s.total_2week?.toFixed(1)}</span>
+          </div>
+          <div style="font-size:11px;color:var(--text2);margin-top:3px">Then ${s.fts_next_week} FT${s.fts_next_week > 1 ? 's' : ''} next week</div>
+        </div>`;
+      }
+      html += '</div>';
+    }
+    html += '</div>';
+  }
+
+  html += `<p style="margin-top:12px;font-size:12px;color:var(--text2)">Predicted starting XI: ${rec.predicted_points?.toFixed(1) || '-'} pts</p>`;
+  html += '</div>';
+
+  document.getElementById('recommendationDisplay').innerHTML = html;
+}
+
+// --- Fixtures ---
+
+function loadFixtures() {
+  const mid = getSeasonManagerId();
+  if (!mid) return;
+  const nextGwVal = nextGW || 1;
+  fetch(`/api/season/fixtures?manager_id=${mid}&from_gw=${nextGwVal}&to_gw=${Math.min(nextGwVal + 7, 38)}`)
+    .then(r => r.json())
+    .then(d => {
+      if (d.error) return;
+      renderFixtureGrid(d.fixtures || [], nextGwVal);
+    });
+}
+
+function refreshFixtures() {
+  const mid = getSeasonManagerId();
+  if (!mid) return;
+  fetch('/api/season/update-fixtures', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({manager_id: parseInt(mid)}),
+  }).then(() => loadFixtures());
+}
+
+function renderFixtureGrid(fixtures, fromGW) {
+  if (!fixtures.length) {
+    document.getElementById('fixtureGridContainer').innerHTML =
+      '<div class="empty-state"><p>No fixture data. Click "Refresh Fixtures".</p></div>';
+    return;
+  }
+
+  // Organize: team -> gw -> fixture data
+  const teams = {};
+  const gws = new Set();
+  fixtures.forEach(f => {
+    if (!teams[f.team_short]) teams[f.team_short] = {};
+    gws.add(f.gameweek);
+    teams[f.team_short][f.gameweek] = f;
+  });
+
+  const sortedGWs = Array.from(gws).sort((a, b) => a - b);
+  const sortedTeams = Object.keys(teams).sort();
+
+  let html = '<div class="fixture-grid-wrap"><table class="fixture-grid"><thead><tr><th>Team</th>';
+  sortedGWs.forEach(gw => { html += `<th>GW${gw}</th>`; });
+  html += '</tr></thead><tbody>';
+
+  sortedTeams.forEach(team => {
+    html += `<tr><td>${team}</td>`;
+    sortedGWs.forEach(gw => {
+      const f = teams[team][gw];
+      if (!f) {
+        html += '<td>-</td>';
+      } else if (f.is_bgw) {
+        html += '<td class="fx-bgw">BLANK</td>';
+      } else {
+        let opps = [];
+        try { opps = JSON.parse(f.opponents_json || '[]'); } catch(e) {}
+        const fdrClass = f.fdr_avg ? `fx-fdr-${Math.round(f.fdr_avg)}` : '';
+        const dgwClass = f.is_dgw ? 'fx-dgw' : '';
+        html += `<td class="${fdrClass} ${dgwClass}">${opps.join(', ') || '-'}</td>`;
+      }
+    });
+    html += '</tr>';
+  });
+
+  html += '</tbody></table></div>';
+  document.getElementById('fixtureGridContainer').innerHTML = html;
+}
+
+// --- Transfer History ---
+
+function loadTransferHistory() {
+  const mid = getSeasonManagerId();
+  if (!mid) return;
+  fetch(`/api/season/transfer-history?manager_id=${mid}`)
+    .then(r => r.json())
+    .then(d => {
+      renderTransferHistory(d.transfer_history || []);
+    });
+}
+
+function renderTransferHistory(history) {
+  if (!history.length) {
+    document.getElementById('transferHistoryContainer').innerHTML =
+      '<div class="empty-state"><p>No transfer history yet.</p></div>';
+    return;
+  }
+
+  let html = '<div class="bt-table-wrap"><table class="bt-table"><thead><tr>';
+  html += '<th>GW</th><th>Cost</th><th>Chip</th><th>Followed?</th><th>Point Impact</th>';
+  html += '</tr></thead><tbody>';
+
+  history.forEach(h => {
+    const cost = h.transfers_cost || 0;
+    const chip = h.chip_used || '-';
+    const followed = h.followed_transfers != null ? (h.followed_transfers ? 'Yes' : 'No') : '-';
+    const delta = h.point_delta != null ? (h.point_delta >= 0 ? '+' + h.point_delta.toFixed(1) : h.point_delta.toFixed(1)) : '-';
+    const deltaClass = h.point_delta > 0 ? 'bt-good' : h.point_delta < 0 ? 'bt-bad' : '';
+    html += `<tr>
+      <td>GW${h.gameweek}</td>
+      <td>${cost > 0 ? '-' + cost + 'pts' : 'Free'}</td>
+      <td>${chip}</td>
+      <td>${followed}</td>
+      <td class="${deltaClass}">${delta}</td>
+    </tr>`;
+  });
+
+  html += '</tbody></table></div>';
+  document.getElementById('transferHistoryContainer').innerHTML = html;
+}
+
+// --- Chips ---
+
+function loadChips() {
+  const mid = getSeasonManagerId();
+  if (!mid) return;
+  fetch(`/api/season/chips?manager_id=${mid}`)
+    .then(r => r.json())
+    .then(d => {
+      renderChips(d.chips || [], d.chip_values || {});
+    });
+}
+
+function renderChips(chips, chipValues) {
+  let html = '<div class="chip-cards">';
+  chips.forEach(c => {
+    const usedClass = c.used ? 'used' : '';
+    const statusText = c.used ? `Used GW${c.used_gw}` : 'Available';
+    const statusClass = c.used ? '' : 'available';
+    const value = chipValues[c.name];
+    html += `<div class="chip-card ${usedClass}">
+      <div class="chip-name">${c.label}</div>
+      <div class="chip-status ${statusClass}">${statusText}</div>
+      ${!c.used && value != null ? `<div class="chip-value">+${value} pts</div>` : ''}
+    </div>`;
+  });
+  html += '</div>';
+  document.getElementById('chipsContainer').innerHTML = html;
+}
+
+// --- Prices ---
+
+function loadPrices() {
+  const mid = getSeasonManagerId();
+  if (!mid) return;
+  fetch(`/api/season/prices?manager_id=${mid}`)
+    .then(r => r.json())
+    .then(d => {
+      renderPriceAlerts(d.alerts || []);
+      renderPriceTable(d.prices || []);
+    });
+}
+
+function updatePrices() {
+  const mid = getSeasonManagerId();
+  if (!mid) return;
+  fetch('/api/season/update-prices', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({manager_id: parseInt(mid)}),
+  }).then(() => loadPrices());
+}
+
+function renderPriceAlerts(alerts) {
+  if (!alerts.length) {
+    document.getElementById('priceAlertsContainer').innerHTML =
+      '<p style="color:var(--text2);font-size:13px">No significant price alerts right now.</p>';
+    return;
+  }
+  let html = '<div class="price-alerts">';
+  alerts.forEach(a => {
+    const dirClass = a.direction === 'rise' ? 'rise' : 'fall';
+    const arrow = a.direction === 'rise' ? '&uarr;' : '&darr;';
+    const net = Math.abs(a.net_transfers).toLocaleString();
+    html += `<div class="price-alert">
+      <div>
+        <strong>${a.web_name}</strong>
+        <span style="color:var(--text2);margin-left:4px">${a.team} &middot; ${a.price.toFixed(1)}m</span>
+      </div>
+      <div class="pa-dir ${dirClass}">${arrow} ${net}</div>
+    </div>`;
+  });
+  html += '</div>';
+  document.getElementById('priceAlertsContainer').innerHTML = html;
+}
+
+function renderPriceTable(prices) {
+  if (!prices.length) {
+    document.getElementById('priceTableContainer').innerHTML =
+      '<p style="color:var(--text2);font-size:13px">No price data yet. Click "Update Prices".</p>';
+    return;
+  }
+  let html = '<div class="bt-table-wrap"><table class="bt-table"><thead><tr>';
+  html += '<th>Player</th><th>Price</th><th>In</th><th>Out</th><th>Date</th>';
+  html += '</tr></thead><tbody>';
+  prices.forEach(p => {
+    html += `<tr>
+      <td>${p.web_name || '-'}</td>
+      <td>${p.price ? p.price.toFixed(1) + 'm' : '-'}</td>
+      <td style="color:var(--green)">${(p.transfers_in_event || 0).toLocaleString()}</td>
+      <td style="color:var(--red)">${(p.transfers_out_event || 0).toLocaleString()}</td>
+      <td>${p.snapshot_date || '-'}</td>
+    </tr>`;
+  });
+  html += '</tbody></table></div>';
+  document.getElementById('priceTableContainer').innerHTML = html;
+}
+
+// Hook into SSE task_done to reload season data
+const _origSSEHandler = null;
+(function() {
+  const origConnectSSE = connectSSE;
+  // Patch: after task_done, reload season dashboard
+  const patchInterval = setInterval(() => {
+    const statusText = document.getElementById('statusText');
+    if (!statusText) return;
+    clearInterval(patchInterval);
+  }, 100);
+})();
+
+// We'll add a check in the existing SSE handler by overriding after load
+function seasonOnTaskDone() {
+  const seasonPanel = document.getElementById('seasonPanel');
+  if (seasonPanel && seasonPanel.classList.contains('visible')) {
+    checkSeasonStatus();
+    loadLatestRecommendation();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Init
+// ---------------------------------------------------------------------------
+connectSSE();
+loadPredictions();
+loadModelInfo();
+
+// Restore saved manager ID
+const savedManagerId = localStorage.getItem('fpl_manager_id');
+if (savedManagerId) {
+  document.getElementById('managerIdInput').value = savedManagerId;
+  document.getElementById('seasonManagerId').value = savedManagerId;
+}
+</script>
+</body>
+</html>
