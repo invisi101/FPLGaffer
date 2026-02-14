@@ -28,12 +28,21 @@ OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output"
 
 
 def scrub_nan_recursive(obj):
-    """Recursively replace NaN/inf with None in nested structures."""
+    """Recursively replace NaN/inf with None and numpy types with Python natives."""
     import math
+    import numpy as np
     if isinstance(obj, dict):
         return {k: scrub_nan_recursive(v) for k, v in obj.items()}
     elif isinstance(obj, list):
         return [scrub_nan_recursive(v) for v in obj]
+    elif isinstance(obj, (np.bool_,)):
+        return bool(obj)
+    elif isinstance(obj, (np.integer,)):
+        return int(obj)
+    elif isinstance(obj, (np.floating,)):
+        if np.isnan(obj) or np.isinf(obj):
+            return None
+        return float(obj)
     elif isinstance(obj, float):
         if math.isnan(obj) or math.isinf(obj):
             return None
