@@ -1009,6 +1009,17 @@ def predict_decomposed(
         + pos_df["pts_bonus"]
     ).clip(lower=0)
 
+    # Soft calibration cap: when component predictions stack up (especially for
+    # GKPs where CS + saves + bonus can inflate), dampen extreme values.
+    # Above the threshold, predictions are blended 50/50 with the cap to avoid
+    # hard clipping while still pulling back unrealistic expectations.
+    _position_soft_cap = {"GKP": 7.0, "DEF": 8.0, "MID": 10.0, "FWD": 10.0}
+    cap = _position_soft_cap.get(position, 10.0)
+    pred_col = "predicted_next_gw_points"
+    over = pos_df[pred_col] > cap
+    if over.any():
+        pos_df.loc[over, pred_col] = cap + (pos_df.loc[over, pred_col] - cap) * 0.5
+
     # DGW: sum per-fixture predictions
     if pos_df.duplicated(subset=["player_id"], keep=False).any():
         pred_col = "predicted_next_gw_points"

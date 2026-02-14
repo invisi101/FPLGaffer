@@ -1204,7 +1204,11 @@ class SeasonManager:
     def _evaluate_chips(self, season_id: int, manager_id: int,
                         bootstrap: dict, pred_df, current_squad_ids: set,
                         total_budget: float, history: dict) -> dict:
-        """Estimate point value of each available chip."""
+        """Estimate point value of each available chip.
+
+        Uses fixture calendar for DGW/BGW awareness: boosts BB/TC value
+        in DGW weeks, discounts if a better DGW week exists later.
+        """
         import pandas as pd
 
         chips_used_list = history.get("chips", [])
@@ -1240,16 +1244,37 @@ class SeasonManager:
 
         current_xi_pts = squad_preds.nlargest(11, target_col)[target_col].sum()
 
+        # Fixture awareness: count DGW teams for current and future GWs
+        fixture_calendar = self.db.get_fixture_calendar(season_id, from_gw=next_gw)
+        dgw_by_gw = {}
+        for f in fixture_calendar:
+            gw = f["gameweek"]
+            if f.get("is_dgw"):
+                dgw_by_gw[gw] = dgw_by_gw.get(gw, 0) + 1
+        current_gw_dgw_count = dgw_by_gw.get(next_gw, 0)
+        future_max_dgw = max(
+            (count for gw, count in dgw_by_gw.items() if gw > next_gw),
+            default=0,
+        )
+
         if "bboost" in available:
             # Bench Boost: sum of bench predictions (4 lowest of 15)
             all_15 = squad_preds.nlargest(15, target_col)[target_col]
             bench_pts = all_15.tail(4).sum() if len(all_15) >= 15 else 0
+            # DGW boost: bench players with double fixtures are worth more
+            dgw_boost = 1.0 + current_gw_dgw_count * 0.15
+            bench_pts *= dgw_boost
+            # Discount if a future GW has significantly more DGW teams
+            if future_max_dgw > current_gw_dgw_count + 2:
+                bench_pts *= 0.7  # Likely better to save BB
             chip_values["bboost"] = round(bench_pts, 1)
 
         if "3xc" in available:
             # Triple Captain: extra captain points (highest predicted * 1)
             best_pred = squad_preds[target_col].max()
-            chip_values["3xc"] = round(best_pred, 1)
+            # DGW boost for TC too
+            dgw_boost = 1.0 + current_gw_dgw_count * 0.1
+            chip_values["3xc"] = round(best_pred * dgw_boost, 1)
 
         if "freehit" in available:
             # Free Hit: unconstrained best team vs current

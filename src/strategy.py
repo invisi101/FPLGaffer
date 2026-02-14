@@ -139,11 +139,12 @@ class ChipEvaluator:
                 dgw_boost = 1.0 + (n_dgw * 0.15)  # 15% boost per DGW team
                 values[gw] = round(bench_pts * dgw_boost, 1)
             else:
-                # Heuristic: base bench value ~6 pts, boosted by DGW count
+                # Heuristic: base bench value ~8 pts (calibrated to match near-term
+                # prediction averages), boosted by DGW count
                 n_dgw = self._count_dgw_teams(fx_by_gw, gw)
                 n_bgw = self._count_bgw_teams(fx_by_gw, gw)
-                base = 6.0
-                values[gw] = round(base * (1 + n_dgw * 0.3) * (1 - n_bgw * 0.05), 1)
+                base = 8.0
+                values[gw] = round(base * (1 + n_dgw * 0.4) * (1 - n_bgw * 0.05), 1)
 
         return values
 
@@ -890,12 +891,13 @@ def detect_plan_invalidation(
             n_dgw = sum(1 for f in gw_fixtures if f.get("is_dgw"))
             n_bgw = sum(1 for f in gw_fixtures if f.get("is_bgw"))
 
-            # If we planned BB for a GW that's no longer a DGW
+            # BB without DGW is unusual but legitimate (strong bench week).
+            # Only flag as moderate warning, not critical.
             if chip_name == "bboost" and n_dgw == 0:
                 triggers.append({
-                    "severity": "critical",
+                    "severity": "moderate",
                     "type": "fixture_change",
-                    "description": f"BB planned for GW{chip_gw} but no DGW fixtures found",
+                    "description": f"BB planned for GW{chip_gw} without DGW fixtures — verify bench strength justifies it",
                     "affected_gws": [chip_gw],
                 })
 
