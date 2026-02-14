@@ -885,7 +885,29 @@ def api_my_team():
 
     current_event = entry.get("current_event")
     if not current_event:
-        return jsonify({"error": "Manager has no current event (season not started?)."}), 400
+        # Pre-season: no picks yet
+        return jsonify({
+            "manager": {
+                "id": manager_id,
+                "name": f"{entry.get('player_first_name', '')} {entry.get('player_last_name', '')}".strip(),
+                "team_name": entry.get("name", ""),
+                "overall_rank": None,
+                "overall_points": 0,
+            },
+            "pre_season": True,
+            "current_event": None,
+            "next_gw": 1,
+            "bank": 100.0,
+            "squad_value": 0,
+            "sell_value": 0,
+            "free_transfers": 0,
+            "active_chip": None,
+            "chips_used": [],
+            "squad": [],
+            "xi_actual_gw": 0,
+            "xi_pred_gw": 0,
+            "xi_pred_3gw": 0,
+        })
 
     try:
         picks_data = fetch_manager_picks(manager_id, current_event)
@@ -1651,6 +1673,114 @@ def api_season_chip_heatmap():
         "chip_heatmap": heatmap,
         "best_gws": best_gws,
         "as_of_gw": plan_row.get("as_of_gw"),
+    })
+
+
+@app.route("/api/season/action-plan")
+def api_season_action_plan():
+    """Build a clear action plan from the latest recommendation."""
+    manager_id = request.args.get("manager_id")
+    if not manager_id:
+        return jsonify({"error": "manager_id is required."}), 400
+    try:
+        manager_id = int(manager_id)
+    except (TypeError, ValueError):
+        return jsonify({"error": "manager_id must be an integer."}), 400
+
+    result = _season_mgr.get_action_plan(manager_id)
+    if "error" in result:
+        return jsonify(result), 404
+    return jsonify(result)
+
+
+@app.route("/api/season/outcomes")
+def api_season_outcomes():
+    """Return all recorded outcomes for the season."""
+    manager_id = request.args.get("manager_id")
+    if not manager_id:
+        return jsonify({"error": "manager_id is required."}), 400
+    try:
+        manager_id = int(manager_id)
+    except (TypeError, ValueError):
+        return jsonify({"error": "manager_id must be an integer."}), 400
+
+    outcomes = _season_mgr.get_outcomes(manager_id)
+    return jsonify({"outcomes": outcomes})
+
+
+@app.route("/api/preseason/generate", methods=["POST"])
+def api_preseason_generate():
+    """Generate pre-season plan (initial squad + chip plan)."""
+    body = request.get_json(silent=True) or {}
+    manager_id = body.get("manager_id")
+    if not manager_id:
+        return jsonify({"error": "manager_id is required."}), 400
+    try:
+        manager_id = int(manager_id)
+    except (TypeError, ValueError):
+        return jsonify({"error": "manager_id must be an integer."}), 400
+
+    _preseason_result = {}
+
+    def do_preseason():
+        nonlocal _preseason_result
+        _preseason_result = _season_mgr.generate_preseason_plan(
+            manager_id, progress_fn=print,
+        )
+
+    started = _run_in_background("Pre-Season Plan", do_preseason)
+    if not started:
+        return jsonify({"error": "Another task is already running."}), 409
+    return jsonify({"status": "started"})
+
+
+@app.route("/api/preseason/result")
+def api_preseason_result():
+    """Fetch the pre-season plan (initial squad + chip plan)."""
+    manager_id = request.args.get("manager_id")
+    if not manager_id:
+        return jsonify({"error": "manager_id is required."}), 400
+    try:
+        manager_id = int(manager_id)
+    except (TypeError, ValueError):
+        return jsonify({"error": "manager_id must be an integer."}), 400
+
+    season = _season_db.get_season(manager_id)
+    if not season:
+        return jsonify({"error": "No pre-season plan generated yet."}), 404
+
+    # Get GW1 recommendation which contains the initial squad
+    rec = _season_db.get_recommendation(season["id"], 1)
+    if not rec:
+        return jsonify({"error": "No pre-season plan generated yet."}), 404
+
+    squad = []
+    try:
+        squad = json.loads(rec.get("new_squad_json") or "[]")
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    # Get chip plan
+    plan_row = _season_db.get_strategic_plan(season["id"])
+    chip_schedule = {}
+    chip_heatmap = {}
+    if plan_row:
+        try:
+            plan = json.loads(plan_row.get("plan_json") or "{}")
+            chip_schedule = plan.get("chip_schedule", {})
+        except (json.JSONDecodeError, TypeError):
+            pass
+        try:
+            chip_heatmap = json.loads(plan_row.get("chip_heatmap_json") or "{}")
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    return jsonify({
+        "initial_squad": squad,
+        "predicted_points": rec.get("predicted_points"),
+        "captain": {"id": rec.get("captain_id"), "name": rec.get("captain_name")},
+        "chip_schedule": chip_schedule,
+        "chip_heatmap": chip_heatmap,
     })
 
 

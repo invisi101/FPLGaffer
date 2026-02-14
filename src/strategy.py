@@ -529,6 +529,18 @@ class MultiWeekPlanner:
                         transfers_out = squad_ids - new_squad_ids
                         transfers_in = new_squad_ids - squad_ids
 
+                        # Build player metadata lookup from gw_df for transfers_out
+                        out_meta = {}
+                        for pid in transfers_out:
+                            match = gw_df.loc[gw_df["player_id"] == pid]
+                            if not match.empty:
+                                row = match.iloc[0]
+                                out_meta[pid] = {
+                                    "web_name": row.get("web_name", "Unknown"),
+                                    "position": row.get("position", ""),
+                                    "cost": float(row["cost"]) if "cost" in row and pd.notna(row.get("cost")) else 0,
+                                }
+
                         path.append({
                             "gw": gw,
                             "transfers_in": [
@@ -540,7 +552,10 @@ class MultiWeekPlanner:
                                 for p in result["players"] if p["player_id"] in transfers_in
                             ],
                             "transfers_out": [
-                                {"player_id": pid}
+                                {"player_id": pid,
+                                 "web_name": out_meta.get(pid, {}).get("web_name", "Unknown"),
+                                 "position": out_meta.get(pid, {}).get("position", ""),
+                                 "cost": out_meta.get(pid, {}).get("cost", 0)}
                                 for pid in transfers_out
                             ],
                             "ft_used": len(transfers_in),

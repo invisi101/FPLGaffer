@@ -43,7 +43,7 @@ Every decision (transfer, captain, bench order, chip) should be made in context 
 
 ## Testing the App
 
-1. Kill any existing process on port 9876
+1. Kill any existing process on port 9875
 2. Start with `.venv/bin/python -m src.app`
 3. Only one background task runs at a time (train, backtest, etc.)
 4. Test API with curl, e.g.: `curl -s http://127.0.0.1:9875/api/my-team?manager_id=12904702`

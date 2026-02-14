@@ -925,6 +925,125 @@
     margin-bottom: 8px;
   }
 
+  .wf-step {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    border-radius: 8px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--text2);
+    transition: all 0.2s;
+  }
+  .wf-step.done {
+    border-color: var(--green);
+    color: var(--green);
+  }
+  .wf-step.done .wf-step-num {
+    background: var(--green);
+    color: var(--bg);
+  }
+  .wf-step.current {
+    border-color: var(--accent);
+    color: var(--text);
+    background: rgba(108, 99, 255, 0.1);
+  }
+  .wf-step.current .wf-step-num {
+    background: var(--accent);
+    color: #fff;
+    animation: pulse 1.5s infinite;
+  }
+  .wf-step-num {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--surface);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 11px;
+    flex-shrink: 0;
+  }
+  .wf-step-label {
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .wf-step-arrow {
+    color: var(--text2);
+    font-size: 14px;
+    padding: 0 6px;
+  }
+
+  .action-plan-card {
+    background: var(--surface);
+    border: 1px solid var(--accent);
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 16px;
+  }
+  .action-plan-card h4 {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 12px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .action-step {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+  .action-step:last-child { border-bottom: none; }
+  .action-step-check {
+    width: 18px;
+    height: 18px;
+    border-radius: 4px;
+    border: 2px solid var(--border);
+    flex-shrink: 0;
+    cursor: pointer;
+    margin-top: 1px;
+    transition: all 0.15s;
+  }
+  .action-step-check:hover { border-color: var(--accent); }
+  .action-step-check.checked {
+    background: var(--green);
+    border-color: var(--green);
+  }
+  .action-step-icon {
+    font-size: 14px;
+    flex-shrink: 0;
+    width: 20px;
+    text-align: center;
+  }
+
+  .outcome-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    margin-top: 16px;
+  }
+  .outcome-card h4 {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 12px;
+  }
+  .outcome-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+  .outcome-row:last-child { border-bottom: none; }
+
   .workflow-actions {
     display: flex;
     gap: 12px;
@@ -1260,6 +1379,18 @@
     </div>
   </div>
 
+  <!-- Pre-Season Setup (shown when season hasn't started) -->
+  <div id="preSeasonPanel" style="display:none">
+    <div style="background:linear-gradient(135deg, var(--surface) 0%, #1a1d2e 100%);border:1px solid var(--accent);border-radius:12px;padding:24px;margin-bottom:20px">
+      <h3 style="font-size:18px;margin-bottom:8px;color:var(--accent)">Pre-Season Setup</h3>
+      <p style="color:var(--text2);margin-bottom:16px">The FPL season hasn't started yet. Generate an optimal initial squad based on player prices and last season's data.</p>
+      <button class="btn btn-primary" onclick="generatePreseasonPlan()" style="margin-right:8px">Generate Initial Squad</button>
+      <span id="preseasonStatus" style="font-size:12px;color:var(--text2)"></span>
+    </div>
+    <div id="preseasonSquadDisplay"></div>
+    <div id="preseasonChipPlan"></div>
+  </div>
+
   <!-- Dashboard (shown when season is active) -->
   <div id="seasonDashboard" style="display:none">
     <div class="season-sub-tabs">
@@ -1288,11 +1419,40 @@
 
     <!-- Weekly Workflow Section -->
     <div class="season-section" id="seasonWorkflow">
+      <!-- Workflow Step Indicators -->
+      <div id="workflowSteps" style="display:flex;gap:0;margin-bottom:20px;align-items:center;flex-wrap:wrap">
+        <div class="wf-step" id="wfStep1" data-step="1">
+          <div class="wf-step-num">1</div>
+          <div class="wf-step-label">Get Latest Data</div>
+        </div>
+        <div class="wf-step-arrow">&rarr;</div>
+        <div class="wf-step" id="wfStep2" data-step="2">
+          <div class="wf-step-num">2</div>
+          <div class="wf-step-label">Generate Recommendation</div>
+        </div>
+        <div class="wf-step-arrow">&rarr;</div>
+        <div class="wf-step" id="wfStep3" data-step="3">
+          <div class="wf-step-num">3</div>
+          <div class="wf-step-label">Execute Actions</div>
+        </div>
+        <div class="wf-step-arrow">&rarr;</div>
+        <div class="wf-step" id="wfStep4" data-step="4">
+          <div class="wf-step-num">4</div>
+          <div class="wf-step-label">Record Results</div>
+        </div>
+      </div>
+
       <div class="workflow-actions">
         <button class="btn btn-primary" onclick="generateRecommendation()">Generate Recommendation</button>
         <button class="btn" onclick="recordResults()">Record Results</button>
       </div>
+
+      <!-- Action Plan Card -->
+      <div id="actionPlanDisplay"></div>
+
       <div id="recommendationDisplay"></div>
+
+      <!-- Outcome Display -->
       <div id="outcomeDisplay"></div>
     </div>
 
@@ -2562,17 +2722,50 @@ function getSeasonManagerId() {
 function checkSeasonStatus() {
   const mid = getSeasonManagerId();
   if (!mid) return;
-  fetch(`/api/season/status?manager_id=${mid}`)
+
+  // Check if pre-season (no current event)
+  fetch(`/api/my-team?manager_id=${mid}`)
     .then(r => r.json())
-    .then(d => {
-      if (d.active) {
+    .then(teamData => {
+      if (teamData.pre_season) {
+        // Pre-season mode
         document.getElementById('seasonInitSection').style.display = 'none';
-        document.getElementById('seasonDashboard').style.display = 'block';
-        loadSeasonDashboard();
-      } else {
-        document.getElementById('seasonInitSection').style.display = 'block';
         document.getElementById('seasonDashboard').style.display = 'none';
+        document.getElementById('preSeasonPanel').style.display = 'block';
+        loadPreseasonResult();
+        return;
       }
+      document.getElementById('preSeasonPanel').style.display = 'none';
+
+      // Normal check
+      fetch(`/api/season/status?manager_id=${mid}`)
+        .then(r => r.json())
+        .then(d => {
+          if (d.active) {
+            document.getElementById('seasonInitSection').style.display = 'none';
+            document.getElementById('seasonDashboard').style.display = 'block';
+            loadSeasonDashboard();
+          } else {
+            document.getElementById('seasonInitSection').style.display = 'block';
+            document.getElementById('seasonDashboard').style.display = 'none';
+          }
+        });
+    })
+    .catch(() => {
+      // If my-team fetch fails, fall back to season status check
+      document.getElementById('preSeasonPanel').style.display = 'none';
+      fetch(`/api/season/status?manager_id=${mid}`)
+        .then(r => r.json())
+        .then(d => {
+          if (d.active) {
+            document.getElementById('seasonInitSection').style.display = 'none';
+            document.getElementById('seasonDashboard').style.display = 'block';
+            loadSeasonDashboard();
+          } else {
+            document.getElementById('seasonInitSection').style.display = 'block';
+            document.getElementById('seasonDashboard').style.display = 'none';
+          }
+        });
     });
 }
 
@@ -2622,6 +2815,7 @@ function switchSeasonSection(btn) {
   if (el) el.classList.add('visible');
 
   // Load data for section
+  if (section === 'workflow') { loadActionPlan(); loadOutcomes(); updateWorkflowSteps(); }
   if (section === 'fixtures') loadFixtures();
   if (section === 'transfers') loadTransferHistory();
   if (section === 'chips') loadChips();
@@ -2928,6 +3122,215 @@ function recordResults() {
     body: JSON.stringify({manager_id: parseInt(mid)}),
   }).then(r => r.json()).then(d => {
     if (d.error) return alert(d.error);
+  });
+}
+
+// --- Action Plan ---
+
+function loadActionPlan() {
+  const mid = getSeasonManagerId();
+  if (!mid) return;
+  fetch(`/api/season/action-plan?manager_id=${mid}`)
+    .then(r => r.json())
+    .then(d => {
+      if (d.error) {
+        document.getElementById('actionPlanDisplay').innerHTML = '';
+        return;
+      }
+      renderActionPlan(d);
+    });
+}
+
+function renderActionPlan(plan) {
+  const steps = plan.steps || [];
+  if (!steps.length) {
+    document.getElementById('actionPlanDisplay').innerHTML = '';
+    return;
+  }
+
+  const deadlineStr = plan.deadline
+    ? new Date(plan.deadline).toLocaleString('en-GB', {weekday:'short', day:'numeric', month:'short', hour:'2-digit', minute:'2-digit'})
+    : 'Unknown';
+
+  const actionIcons = {
+    transfer: '&#x1F504;',
+    captain: '&#x00A9;',
+    chip: '&#x1F0CF;',
+    bench_order: '&#x1F4CB;',
+  };
+  const actionColors = {
+    transfer: 'var(--red)',
+    captain: 'var(--yellow)',
+    chip: 'var(--green)',
+    bench_order: 'var(--text2)',
+  };
+
+  let html = `<div class="action-plan-card">
+    <h4>
+      <span>GW${plan.gameweek} Action Plan</span>
+      <span style="font-size:12px;font-weight:400;color:var(--yellow)">Deadline: ${deadlineStr}</span>
+    </h4>`;
+
+  steps.forEach((step, i) => {
+    const icon = actionIcons[step.action] || '&#x2022;';
+    const color = actionColors[step.action] || 'var(--text2)';
+    html += `<div class="action-step">
+      <div class="action-step-check" onclick="this.classList.toggle('checked')"></div>
+      <div class="action-step-icon" style="color:${color}">${icon}</div>
+      <div>${step.description}</div>
+    </div>`;
+  });
+
+  if (plan.rationale) {
+    html += `<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border);font-size:12px;color:var(--text2);line-height:1.5">${plan.rationale}</div>`;
+  }
+
+  html += `<div style="margin-top:10px;display:flex;justify-content:flex-end">
+    <button class="btn" onclick="copyActionPlan()" style="font-size:11px;padding:4px 10px">Copy to Clipboard</button>
+  </div>`;
+  html += '</div>';
+  document.getElementById('actionPlanDisplay').innerHTML = html;
+}
+
+function copyActionPlan() {
+  const card = document.getElementById('actionPlanDisplay');
+  if (!card) return;
+  const steps = card.querySelectorAll('.action-step');
+  const lines = [];
+  steps.forEach((el, i) => {
+    const text = el.querySelector('div:last-child').textContent.trim();
+    lines.push(`${i + 1}. ${text}`);
+  });
+  navigator.clipboard.writeText(lines.join('\n')).then(() => {
+    const btn = card.querySelector('button');
+    if (btn) { btn.textContent = 'Copied!'; setTimeout(() => btn.textContent = 'Copy to Clipboard', 1500); }
+  });
+}
+
+// --- Outcomes ---
+
+function loadOutcomes() {
+  const mid = getSeasonManagerId();
+  if (!mid) return;
+  fetch(`/api/season/outcomes?manager_id=${mid}`)
+    .then(r => r.json())
+    .then(d => {
+      const outcomes = d.outcomes || [];
+      if (!outcomes.length) {
+        document.getElementById('outcomeDisplay').innerHTML = '';
+        return;
+      }
+      renderOutcomes(outcomes);
+    });
+}
+
+function renderOutcomes(outcomes) {
+  if (!outcomes.length) {
+    document.getElementById('outcomeDisplay').innerHTML = '';
+    return;
+  }
+
+  // Show latest outcome prominently + summary trend
+  const latest = outcomes[outcomes.length - 1];
+  const delta = latest.point_delta || 0;
+  const deltaColor = delta >= 0 ? 'var(--green)' : 'var(--red)';
+  const deltaSign = delta >= 0 ? '+' : '';
+  const captainIcon = latest.followed_captain ? '<span style="color:var(--green)">&#x2714;</span>' : '<span style="color:var(--red)">&#x2718;</span>';
+  const transferIcon = latest.followed_transfers ? '<span style="color:var(--green)">&#x2714;</span>' : '<span style="color:var(--red)">&#x2718;</span>';
+
+  let html = `<div class="outcome-card">
+    <h4>GW${latest.gameweek} Outcome</h4>
+    <div class="outcome-row">
+      <span>Actual Points</span>
+      <strong>${latest.actual_points || 0}</strong>
+    </div>
+    <div class="outcome-row">
+      <span>Predicted Points</span>
+      <span>${(latest.recommended_points || 0).toFixed(1)}</span>
+    </div>
+    <div class="outcome-row">
+      <span>Delta</span>
+      <span style="color:${deltaColor};font-weight:600">${deltaSign}${delta.toFixed(1)}</span>
+    </div>
+    <div class="outcome-row">
+      <span>Followed Captain</span>
+      ${captainIcon}
+    </div>
+    <div class="outcome-row">
+      <span>Followed Transfers</span>
+      ${transferIcon}
+    </div>`;
+
+  // Trend over all outcomes
+  if (outcomes.length > 1) {
+    const avgDelta = outcomes.reduce((s, o) => s + (o.point_delta || 0), 0) / outcomes.length;
+    const avgColor = avgDelta >= 0 ? 'var(--green)' : 'var(--red)';
+    const avgSign = avgDelta >= 0 ? '+' : '';
+    const captainRate = Math.round(outcomes.filter(o => o.followed_captain).length / outcomes.length * 100);
+    html += `<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
+      <div style="font-size:12px;color:var(--text2);margin-bottom:4px">Season Trend (${outcomes.length} GWs)</div>
+      <div style="display:flex;gap:16px;font-size:12px">
+        <span>Avg delta: <strong style="color:${avgColor}">${avgSign}${avgDelta.toFixed(1)}</strong></span>
+        <span>Captain follow rate: <strong>${captainRate}%</strong></span>
+      </div>
+    </div>`;
+  }
+
+  html += '</div>';
+  document.getElementById('outcomeDisplay').innerHTML = html;
+}
+
+// --- Workflow Step Indicators ---
+
+function updateWorkflowSteps() {
+  const mid = getSeasonManagerId();
+  if (!mid) return;
+
+  // Check state to determine which step we're on
+  const steps = [
+    document.getElementById('wfStep1'),
+    document.getElementById('wfStep2'),
+    document.getElementById('wfStep3'),
+    document.getElementById('wfStep4'),
+  ];
+  if (!steps[0]) return;
+
+  // Reset all
+  steps.forEach(s => { s.classList.remove('done', 'current'); });
+
+  // Step 1: Has data? Check cache age
+  fetch('/api/model-info').then(r => r.json()).then(info => {
+    const hasData = info.cache_age_seconds != null;
+    const hasModels = (info.models || []).some(m => m.exists);
+
+    if (hasData) steps[0].classList.add('done');
+    else { steps[0].classList.add('current'); return; }
+
+    // Step 2: Has recommendation for next GW?
+    fetch(`/api/season/recommendations?manager_id=${mid}`).then(r => r.json()).then(d => {
+      const recs = d.recommendations || [];
+      const nextGwVal = info.next_gw;
+      const hasRec = recs.some(r => r.gameweek === nextGwVal);
+
+      if (hasRec) {
+        steps[1].classList.add('done');
+        steps[2].classList.add('current'); // Execute actions is always "current" until GW finishes
+      } else {
+        steps[1].classList.add('current');
+        return;
+      }
+
+      // Step 4: Has outcome for this GW?
+      fetch(`/api/season/outcomes?manager_id=${mid}`).then(r => r.json()).then(od => {
+        const outcomes = od.outcomes || [];
+        const hasOutcome = outcomes.some(o => o.gameweek === nextGwVal);
+        if (hasOutcome) {
+          steps[2].classList.add('done');
+          steps[2].classList.remove('current');
+          steps[3].classList.add('done');
+        }
+      });
+    });
   });
 }
 
@@ -3313,7 +3716,111 @@ function seasonOnTaskDone() {
   if (seasonPanel && seasonPanel.classList.contains('visible')) {
     checkSeasonStatus();
     loadLatestRecommendation();
+    loadActionPlan();
+    loadOutcomes();
+    updateWorkflowSteps();
   }
+}
+
+// ---------------------------------------------------------------------------
+// Pre-Season
+// ---------------------------------------------------------------------------
+
+function generatePreseasonPlan() {
+  const mid = getSeasonManagerId();
+  if (!mid) return alert('Enter a Manager ID');
+  localStorage.setItem('fpl_manager_id', mid);
+  document.getElementById('preseasonStatus').textContent = 'Generating...';
+  fetch('/api/preseason/generate', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({manager_id: parseInt(mid)}),
+  }).then(r => r.json()).then(d => {
+    if (d.error) {
+      document.getElementById('preseasonStatus').textContent = d.error;
+    } else {
+      document.getElementById('preseasonStatus').textContent = 'Running in background...';
+    }
+  });
+}
+
+function loadPreseasonResult() {
+  const mid = getSeasonManagerId();
+  if (!mid) return;
+  fetch(`/api/preseason/result?manager_id=${mid}`)
+    .then(r => r.json())
+    .then(d => {
+      if (d.error) return;
+      renderPreseasonSquad(d);
+      renderPreseasonChipPlan(d);
+      document.getElementById('preseasonStatus').textContent = 'Plan generated';
+    });
+}
+
+function renderPreseasonSquad(data) {
+  const squad = data.initial_squad || [];
+  if (!squad.length) {
+    document.getElementById('preseasonSquadDisplay').innerHTML = '';
+    return;
+  }
+
+  const starters = squad.filter(p => p.starter);
+  const bench = squad.filter(p => !p.starter);
+  const posOrder = {GKP: 0, DEF: 1, MID: 2, FWD: 3};
+  starters.sort((a, b) => (posOrder[a.position] || 9) - (posOrder[b.position] || 9));
+  bench.sort((a, b) => (posOrder[a.position] || 9) - (posOrder[b.position] || 9));
+
+  let html = `<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px">
+    <h4 style="font-size:14px;margin-bottom:4px">Recommended Initial Squad</h4>
+    <div style="font-size:12px;color:var(--text2);margin-bottom:12px">
+      Predicted XI: <strong style="color:var(--green)">${(data.predicted_points || 0).toFixed(1)} pts</strong>
+      &middot; Captain: <strong>${data.captain?.name || '-'}</strong>
+    </div>
+    <div style="font-size:11px;text-transform:uppercase;color:var(--text2);margin-bottom:6px">Starting XI</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-bottom:12px">`;
+
+  starters.forEach(p => {
+    html += `<div style="background:var(--surface2);padding:8px 10px;border-radius:6px;border-left:3px solid var(--green)">
+      <div style="font-weight:600;font-size:13px">${p.web_name || '?'}</div>
+      <div style="font-size:11px;color:var(--text2)">${p.position || ''} &middot; ${p.team || ''} &middot; ${(p.cost || 0).toFixed(1)}m</div>
+    </div>`;
+  });
+
+  html += `</div><div style="font-size:11px;text-transform:uppercase;color:var(--text2);margin-bottom:6px">Bench</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px">`;
+
+  bench.forEach(p => {
+    html += `<div style="background:var(--surface2);padding:8px 10px;border-radius:6px;border-left:3px solid var(--border)">
+      <div style="font-weight:600;font-size:13px">${p.web_name || '?'}</div>
+      <div style="font-size:11px;color:var(--text2)">${p.position || ''} &middot; ${p.team || ''} &middot; ${(p.cost || 0).toFixed(1)}m</div>
+    </div>`;
+  });
+
+  html += '</div></div>';
+  document.getElementById('preseasonSquadDisplay').innerHTML = html;
+}
+
+function renderPreseasonChipPlan(data) {
+  const schedule = data.chip_schedule || {};
+  const entries = Object.entries(schedule);
+  if (!entries.length) {
+    document.getElementById('preseasonChipPlan').innerHTML = '';
+    return;
+  }
+
+  let html = `<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px">
+    <h4 style="font-size:14px;margin-bottom:12px">Season Chip Plan</h4>
+    <div style="display:flex;gap:12px;flex-wrap:wrap">`;
+
+  entries.forEach(([chip, gw]) => {
+    html += `<div style="background:var(--accent);color:#fff;padding:10px 16px;border-radius:8px;text-align:center">
+      <div style="font-size:14px;font-weight:600">${chipLabel(chip)}</div>
+      <div style="font-size:20px;font-weight:800">GW${gw}</div>
+    </div>`;
+  });
+
+  html += '</div></div>';
+  document.getElementById('preseasonChipPlan').innerHTML = html;
 }
 
 // ---------------------------------------------------------------------------
@@ -3578,6 +4085,11 @@ seasonOnTaskDone = function() {
   const strategySection = document.getElementById('seasonStrategy');
   if (strategySection && strategySection.classList.contains('visible')) {
     loadStrategicPlan();
+  }
+  // Reload pre-season results if that panel is visible
+  const preSeasonPanel = document.getElementById('preSeasonPanel');
+  if (preSeasonPanel && preSeasonPanel.style.display !== 'none') {
+    loadPreseasonResult();
   }
 };
 

@@ -131,7 +131,8 @@ class SeasonManager:
         current_event = entry.get("current_event")
 
         if not current_event:
-            raise ValueError("Manager has no current event (season not started?).")
+            log("Season not started yet — switching to pre-season mode.")
+            return self.generate_preseason_plan(manager_id, progress_fn=progress_fn)
 
         log(f"Manager: {manager_name} ({team_name})")
         log(f"Current GW: {current_event}")
@@ -803,6 +804,319 @@ class SeasonManager:
             "total_points": gw_data.get("total_points"),
             "overall_rank": gw_data.get("overall_rank"),
             "outcome": outcome,
+        }
+
+    # -------------------------------------------------------------------
+    # Action Plan
+    # -------------------------------------------------------------------
+
+    def get_action_plan(self, manager_id: int) -> dict:
+        """Build clear action items from the latest recommendation + strategic plan."""
+        season = self.db.get_season(manager_id)
+        if not season:
+            return {"error": "No active season."}
+        season_id = season["id"]
+
+        bootstrap = self._load_bootstrap()
+        next_gw = self._get_next_gw(bootstrap)
+        if not next_gw:
+            return {"error": "Could not determine next gameweek."}
+
+        # Get GW deadline
+        deadline = None
+        for event in bootstrap.get("events", []):
+            if event.get("id") == next_gw:
+                deadline = event.get("deadline_time", "")
+                break
+
+        rec = self.db.get_recommendation(season_id, next_gw)
+        if not rec:
+            return {"error": f"No recommendation for GW{next_gw}. Generate one first."}
+
+        steps = []
+        priority = 1
+
+        # Transfers
+        transfers = json.loads(rec.get("transfers_json") or "[]")
+        has_pairs = transfers and isinstance(transfers[0], dict) and "out" in transfers[0]
+        if has_pairs and transfers:
+            for pair in transfers:
+                out_name = pair.get("out", {}).get("web_name", "?")
+                in_name = pair.get("in", {}).get("web_name", "?")
+                steps.append({
+                    "action": "transfer",
+                    "description": f"Transfer out {out_name}, bring in {in_name}",
+                    "priority": priority,
+                })
+                priority += 1
+        elif not has_pairs:
+            # Check for old format or no transfers
+            in_t = [t for t in transfers if t.get("direction") == "in"]
+            out_t = [t for t in transfers if t.get("direction") == "out"]
+            for i in range(max(len(in_t), len(out_t))):
+                out_name = out_t[i].get("web_name", "?") if i < len(out_t) else "?"
+                in_name = in_t[i].get("web_name", "?") if i < len(in_t) else "?"
+                steps.append({
+                    "action": "transfer",
+                    "description": f"Transfer out {out_name}, bring in {in_name}",
+                    "priority": priority,
+                })
+                priority += 1
+
+        if not steps:
+            steps.append({
+                "action": "transfer",
+                "description": "No transfers - bank your free transfer",
+                "priority": priority,
+            })
+            priority += 1
+
+        # Captain
+        captain_name = rec.get("captain_name")
+        if captain_name:
+            steps.append({
+                "action": "captain",
+                "description": f"Set captain to {captain_name}",
+                "priority": priority,
+            })
+            priority += 1
+
+        # Chip
+        chip_suggestion = rec.get("chip_suggestion")
+        if chip_suggestion:
+            chip_labels = {
+                "wildcard": "Wildcard", "freehit": "Free Hit",
+                "bboost": "Bench Boost", "3xc": "Triple Captain",
+            }
+            steps.append({
+                "action": "chip",
+                "description": f"Activate {chip_labels.get(chip_suggestion, chip_suggestion)}",
+                "priority": priority,
+            })
+            priority += 1
+
+        # Bench order hint
+        steps.append({
+            "action": "bench_order",
+            "description": "Check bench order (highest predicted points first off bench)",
+            "priority": priority,
+        })
+
+        # Rationale from strategic plan
+        rationale = ""
+        plan_row = self.db.get_strategic_plan(season_id)
+        if plan_row and plan_row.get("plan_json"):
+            try:
+                plan = json.loads(plan_row["plan_json"])
+                rationale = plan.get("rationale", "")
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        return {
+            "gameweek": next_gw,
+            "deadline": deadline,
+            "steps": steps,
+            "rationale": rationale,
+            "predicted_points": rec.get("predicted_points"),
+        }
+
+    # -------------------------------------------------------------------
+    # Outcomes
+    # -------------------------------------------------------------------
+
+    def get_outcomes(self, manager_id: int) -> list[dict]:
+        """Return all recorded outcomes for the season."""
+        season = self.db.get_season(manager_id)
+        if not season:
+            return []
+        return self.db.get_outcomes(season["id"])
+
+    # -------------------------------------------------------------------
+    # Pre-Season Plan
+    # -------------------------------------------------------------------
+
+    def generate_preseason_plan(self, manager_id: int, progress_fn=None) -> dict:
+        """Pre-GW1: select initial squad + full season chip plan."""
+        def log(msg):
+            if progress_fn:
+                progress_fn(msg)
+            else:
+                print(msg)
+
+        bootstrap = self._load_bootstrap()
+        elements = bootstrap.get("elements", [])
+        elements_map = self._get_elements_map(bootstrap)
+        id_to_code, id_to_short, code_to_short = self._get_team_maps(bootstrap)
+
+        # Check if season already started
+        for event in bootstrap.get("events", []):
+            if event.get("is_current") or event.get("is_next"):
+                # Season has started — this endpoint shouldn't be used
+                next_gw = event["id"]
+                break
+        else:
+            next_gw = 1  # True pre-season
+
+        log("Pre-season plan: generating predictions...")
+
+        # Try to generate predictions
+        import pandas as pd
+        from src.predict import build_preseason_predictions, format_predictions
+
+        try:
+            from src.data_fetcher import load_all_data
+            from src.feature_engineering import build_features
+
+            data = load_all_data()
+            df = build_features(data)
+            preds = build_preseason_predictions(df, data, bootstrap)
+        except Exception as exc:
+            log(f"  Prediction generation failed: {exc}")
+            preds = pd.DataFrame()
+
+        if preds.empty:
+            # Fall back to pure price-based heuristic
+            log("  Using price-based heuristic for initial squad...")
+            element_type_map = {1: "GKP", 2: "DEF", 3: "MID", 4: "FWD"}
+            rows = []
+            for el in elements:
+                cost = el.get("now_cost", 0) / 10
+                rows.append({
+                    "player_id": el["id"],
+                    "web_name": el.get("web_name", "Unknown"),
+                    "position": element_type_map.get(el.get("element_type"), "MID"),
+                    "cost": cost,
+                    "team_code": id_to_code.get(el.get("team")),
+                    "team": id_to_short.get(el.get("team"), ""),
+                    "predicted_next_gw_points": round((cost / 10) * 0.5, 2),
+                })
+            preds = pd.DataFrame(rows)
+        else:
+            # Enrich with metadata
+            if "position_clean" in preds.columns and "position" not in preds.columns:
+                preds = preds.rename(columns={"position_clean": "position"})
+
+            # Add cost/team from bootstrap
+            meta_rows = []
+            for el in elements:
+                tid = el.get("team")
+                meta_rows.append({
+                    "player_id": el["id"],
+                    "cost": el.get("now_cost", 0) / 10,
+                    "team_code": id_to_code.get(tid),
+                    "team": id_to_short.get(tid, ""),
+                })
+            meta_df = pd.DataFrame(meta_rows)
+            # Merge metadata, avoid duplicates
+            for col in ["cost", "team_code", "team"]:
+                if col in preds.columns:
+                    preds = preds.drop(columns=[col])
+            preds = preds.merge(meta_df, on="player_id", how="left")
+
+        target_col = "predicted_next_gw_points"
+        if target_col not in preds.columns:
+            return {"error": "Could not generate predictions."}
+
+        # Solve MILP for best initial squad (budget=100.0)
+        log("  Solving for optimal initial squad (budget: 100.0m)...")
+        pool = preds.dropna(subset=["position", "cost", target_col]).copy()
+
+        result = solve_milp_team(pool, target_col, budget=100.0)
+        if not result:
+            return {"error": "Could not find valid initial squad."}
+
+        log(f"  Initial squad: {result['total_cost']:.1f}m, XI predicted: {result['starting_points']:.1f} pts")
+
+        # Create or update season record
+        entry = None
+        try:
+            from src.data_fetcher import fetch_manager_entry
+            entry = fetch_manager_entry(manager_id)
+        except Exception:
+            pass
+        manager_name = ""
+        team_name = ""
+        if entry:
+            manager_name = f"{entry.get('player_first_name', '')} {entry.get('player_last_name', '')}".strip()
+            team_name = entry.get("name", "")
+
+        season_id = self.db.create_season(
+            manager_id=manager_id,
+            manager_name=manager_name,
+            team_name=team_name,
+            season_name="2025-2026",
+            start_gw=1,
+        )
+
+        # Build fixture calendar
+        log("  Building fixture calendar...")
+        self.update_fixture_calendar(season_id)
+
+        # Run chip evaluator for full-season plan
+        log("  Evaluating chips for full season...")
+        squad_ids = {p["player_id"] for p in result["players"]}
+        fixture_calendar = self.db.get_fixture_calendar(season_id)
+
+        # Build future predictions dict for chip evaluator
+        future_preds = {}
+        if not pool.empty:
+            # Use same predictions for all GWs (rough pre-season estimate)
+            gw1_df = pool.rename(columns={target_col: "predicted_points"}).copy()
+            gw1_df["confidence"] = 0.5
+            for gw in range(1, 6):
+                future_preds[gw] = gw1_df.copy()
+
+        chip_evaluator = ChipEvaluator()
+        available_chips = {"wildcard", "freehit", "bboost", "3xc"}
+        chip_heatmap = chip_evaluator.evaluate_all_chips(
+            squad_ids, 100.0, available_chips,
+            future_preds, fixture_calendar,
+        )
+        chip_synergies = chip_evaluator.evaluate_chip_synergies(
+            chip_heatmap, available_chips,
+        )
+
+        synthesizer = PlanSynthesizer()
+        chip_schedule = synthesizer._plan_chip_schedule(
+            chip_heatmap, chip_synergies, available_chips,
+        )
+
+        # Save recommendation for GW1
+        self.db.save_recommendation(
+            season_id=season_id,
+            gameweek=1,
+            transfers_json=json.dumps([]),
+            captain_id=result["players"][0]["player_id"] if result["players"] else None,
+            captain_name=result["players"][0].get("web_name") if result["players"] else None,
+            chip_suggestion=None,
+            chip_values_json=json.dumps({}),
+            bank_analysis_json=json.dumps({}),
+            new_squad_json=json.dumps(scrub_nan(result["players"])),
+            predicted_points=result["starting_points"],
+        )
+
+        # Save strategic plan
+        strategic_plan = {
+            "timeline": [],
+            "chip_schedule": chip_schedule,
+            "chip_synergies": chip_synergies[:3],
+            "rationale": f"Pre-season plan. Chip plan: {', '.join(f'{k} GW{v}' for k, v in chip_schedule.items())}.",
+            "generated_at": __import__("datetime").datetime.now().isoformat(timespec="seconds"),
+        }
+        self.db.save_strategic_plan(
+            season_id=season_id,
+            as_of_gw=1,
+            plan_json=json.dumps(scrub_nan_recursive(strategic_plan)),
+            chip_heatmap_json=json.dumps(scrub_nan_recursive(chip_heatmap)),
+        )
+
+        log("Pre-season plan complete.")
+        return {
+            "initial_squad": scrub_nan(result["players"]),
+            "total_cost": result["total_cost"],
+            "starting_points": result["starting_points"],
+            "chip_schedule": chip_schedule,
+            "chip_heatmap": scrub_nan_recursive(chip_heatmap),
         }
 
     # -------------------------------------------------------------------

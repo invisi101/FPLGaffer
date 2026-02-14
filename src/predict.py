@@ -320,6 +320,101 @@ def predict_future_range(
     return predictions
 
 
+def build_preseason_predictions(
+    df: pd.DataFrame, data: dict, bootstrap: dict,
+) -> pd.DataFrame:
+    """Generate predictions when no current-season data exists (pre-GW1).
+
+    Uses last-season GW38 snapshot with cross-season feature decay,
+    swaps in new-season GW1 fixtures via _build_offset_snapshot().
+    Adds price-based heuristics for new players (not in last season).
+    """
+    from src.model import CURRENT_SEASON
+
+    prev_season = "2024-2025"
+    prev_gw38 = df[(df["season"] == prev_season) & (df["gameweek"] == 38)]
+    if prev_gw38.empty:
+        # Fall back to whatever is the latest available data
+        prev_gw38 = df[df["gameweek"] == df["gameweek"].max()]
+
+    if prev_gw38.empty:
+        print("  No historical data available for pre-season predictions.")
+        return pd.DataFrame()
+
+    fixture_context = get_fixture_context(data)
+
+    # Build snapshot for GW1 using previous season's latest data
+    latest_gw_in_data = int(prev_gw38["gameweek"].max())
+    snapshot = _build_offset_snapshot(
+        prev_gw38, df, target_gw=1,
+        fixture_map=fixture_context["fixture_map"],
+        fdr_map=fixture_context["fdr_map"],
+        elo=fixture_context["elo"],
+        opp_rolling=fixture_context["opp_rolling"],
+    )
+
+    if snapshot.empty:
+        print("  Could not build pre-season snapshot (no GW1 fixtures?).")
+        return pd.DataFrame()
+
+    # Run model predictions on the snapshot
+    all_preds = []
+    for position in POSITION_GROUPS:
+        components = SUB_MODELS_FOR_POSITION.get(position, [])
+        has_sub = all(
+            load_sub_model(position, comp) is not None for comp in components
+        ) if components else False
+
+        if has_sub:
+            preds = predict_decomposed(snapshot, position)
+        else:
+            model_dict = load_model(position, "next_gw_points")
+            if model_dict is None:
+                continue
+            preds = predict_for_position(
+                snapshot, position, "next_gw_points", model_dict,
+            )
+        if not preds.empty:
+            keep = ["player_id", "position_clean", "predicted_next_gw_points"]
+            if "web_name" in preds.columns:
+                keep.insert(1, "web_name")
+            all_preds.append(preds[keep].copy())
+
+    if not all_preds:
+        print("  No pre-season predictions generated (no models?).")
+        return pd.DataFrame()
+
+    result = pd.concat(all_preds, ignore_index=True)
+
+    # Apply cross-season decay (0.90 per GW, ~38 GWs gap)
+    decay_factor = 0.90 ** 5  # Approximate 5-GW equivalent decay for season gap
+    result["predicted_next_gw_points"] = result["predicted_next_gw_points"] * decay_factor
+
+    # Handle new players from bootstrap (not in last season's data)
+    known_ids = set(result["player_id"].unique())
+    elements = bootstrap.get("elements", [])
+    element_type_map = {1: "GKP", 2: "DEF", 3: "MID", 4: "FWD"}
+    new_rows = []
+    for el in elements:
+        pid = el["id"]
+        if pid not in known_ids:
+            cost = el.get("now_cost", 0) / 10
+            # Price-based heuristic: higher cost ~ more points historically
+            heuristic_pts = (cost / 10) * 0.5
+            new_rows.append({
+                "player_id": pid,
+                "web_name": el.get("web_name", "Unknown"),
+                "position_clean": element_type_map.get(el.get("element_type"), "MID"),
+                "predicted_next_gw_points": round(heuristic_pts, 2),
+            })
+
+    if new_rows:
+        result = pd.concat([result, pd.DataFrame(new_rows)], ignore_index=True)
+        print(f"  Added {len(new_rows)} new players via price heuristic.")
+
+    return result
+
+
 def run_predictions(df: pd.DataFrame, data: dict | None = None) -> pd.DataFrame:
     """Generate predictions for all players for the upcoming gameweek(s)."""
     latest_gw = get_latest_gw(df)
