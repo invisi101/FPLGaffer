@@ -57,7 +57,8 @@ class ChipEvaluator:
 
         if "bboost" in available_chips:
             chip_values["bboost"] = self._evaluate_bench_boost(
-                current_squad_ids, future_predictions, fx_by_gw, all_gws, pred_gws,
+                current_squad_ids, total_budget, future_predictions,
+                fx_by_gw, all_gws, pred_gws,
             )
 
         if "3xc" in available_chips:
@@ -116,24 +117,42 @@ class ChipEvaluator:
         return sum(fdrs) / len(fdrs) if fdrs else 3.0
 
     def _evaluate_bench_boost(
-        self, current_squad_ids, future_predictions, fx_by_gw, all_gws, pred_gws,
+        self, current_squad_ids, total_budget, future_predictions,
+        fx_by_gw, all_gws, pred_gws,
     ) -> dict[int, float]:
         """Bench Boost value per GW.
 
-        Within prediction horizon: sum of 4 bench predictions.
-        Beyond: DGW count heuristic (more DGWs = higher bench value).
+        Within prediction horizon: for the immediate GW, uses current squad bench.
+        For future GWs, solves optimal squad via MILP to estimate realistic bench.
+        Beyond prediction horizon: DGW count heuristic.
         """
         values = {}
 
         for gw in all_gws:
             if gw in future_predictions:
                 gw_df = future_predictions[gw]
-                squad_preds = gw_df[gw_df["player_id"].isin(current_squad_ids)]
-                if len(squad_preds) >= 15:
-                    all_15 = squad_preds.nlargest(15, "predicted_points")
-                    bench_pts = all_15.tail(4)["predicted_points"].sum()
+
+                # For immediate GW, use current squad; for future GWs, solve
+                # optimal squad so BB value reflects a realistic future bench
+                if gw == pred_gws[0]:
+                    squad_preds = gw_df[gw_df["player_id"].isin(current_squad_ids)]
+                    if len(squad_preds) >= 15:
+                        all_15 = squad_preds.nlargest(15, "predicted_points")
+                        bench_pts = all_15.tail(4)["predicted_points"].sum()
+                    else:
+                        bench_pts = squad_preds["predicted_points"].sum() * 0.25 if not squad_preds.empty else 0
                 else:
-                    bench_pts = squad_preds["predicted_points"].sum() * 0.25 if not squad_preds.empty else 0
+                    # Solve MILP for optimal 15-man squad at this GW
+                    pool = gw_df.dropna(subset=["predicted_points"]).copy()
+                    if "position" in pool.columns and "cost" in pool.columns:
+                        result = solve_milp_team(pool, "predicted_points", budget=total_budget)
+                        if result and result.get("bench"):
+                            bench_pts = sum(p.get("predicted_points", 0) for p in result["bench"])
+                        else:
+                            bench_pts = 0
+                    else:
+                        bench_pts = 0
+
                 # DGW multiplier: bench players with DGW fixtures are worth more
                 n_dgw = self._count_dgw_teams(fx_by_gw, gw)
                 dgw_boost = 1.0 + (n_dgw * 0.15)  # 15% boost per DGW team
@@ -1049,28 +1068,30 @@ def detect_plan_invalidation(
             name = change.get("web_name", "Unknown")
 
             if status == "i" or (chance is not None and chance < 25):
-                # Check if this player is in any planned squad
-                for entry in timeline:
-                    squad_ids = entry.get("squad_ids", [])
-                    if int(player_id) in [int(x) for x in squad_ids]:
-                        triggers.append({
-                            "severity": "critical",
-                            "type": "injury",
-                            "description": f"{name} injured/unavailable — in planned GW{entry['gw']} squad",
-                            "affected_gws": [entry["gw"]],
-                        })
-                        break
+                # Check ALL planned squads this player appears in
+                affected_gws = [
+                    entry["gw"] for entry in timeline
+                    if int(player_id) in [int(x) for x in entry.get("squad_ids", [])]
+                ]
+                if affected_gws:
+                    triggers.append({
+                        "severity": "critical",
+                        "type": "injury",
+                        "description": f"{name} injured/unavailable — in planned squads GW{','.join(str(g) for g in affected_gws)}",
+                        "affected_gws": affected_gws,
+                    })
             elif chance is not None and chance < 50:
-                for entry in timeline:
-                    squad_ids = entry.get("squad_ids", [])
-                    if int(player_id) in [int(x) for x in squad_ids]:
-                        triggers.append({
-                            "severity": "moderate",
-                            "type": "doubt",
-                            "description": f"{name} doubtful ({chance}% chance) — in GW{entry['gw']} squad",
-                            "affected_gws": [entry["gw"]],
-                        })
-                        break
+                affected_gws = [
+                    entry["gw"] for entry in timeline
+                    if int(player_id) in [int(x) for x in entry.get("squad_ids", [])]
+                ]
+                if affected_gws:
+                    triggers.append({
+                        "severity": "moderate",
+                        "type": "doubt",
+                        "description": f"{name} doubtful ({chance}% chance) — in squads GW{','.join(str(g) for g in affected_gws)}",
+                        "affected_gws": affected_gws,
+                    })
 
     # Sort by severity
     severity_order = {"critical": 0, "moderate": 1, "minor": 2}

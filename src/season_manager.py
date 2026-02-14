@@ -86,9 +86,10 @@ class SeasonManager:
         for event in bootstrap.get("events", []):
             if event.get("is_next"):
                 return event["id"]
+        # If no 'is_next', fall back to the one after 'is_current' (capped at 38)
         for event in bootstrap.get("events", []):
             if event.get("is_current"):
-                return event["id"] + 1
+                return min(event["id"] + 1, 38)
         return None
 
     def _calculate_free_transfers(self, history: dict) -> int:
@@ -216,6 +217,9 @@ class SeasonManager:
                     "position": pos,
                     "team_code": tc,
                     "team": ts,
+                    # NOTE: Historical backfill uses current now_cost, not
+                    # the price at that GW. FPL public API has no historical
+                    # price data. Prices will be approximate for past GWs.
                     "cost": el.get("now_cost", 0) / 10,
                     "starter": pick.get("position", 12) <= 11,
                     "is_captain": pick.get("is_captain", False),
@@ -750,7 +754,9 @@ class SeasonManager:
         picks_data = fetch_manager_picks(manager_id, current_event)
         history = fetch_manager_history(manager_id)
 
-        bootstrap = self._load_bootstrap()
+        # Force-refresh bootstrap so event_points are up to date
+        from src.data_fetcher import fetch_fpl_api
+        bootstrap = fetch_fpl_api("bootstrap", force=True)
         elements_map = self._get_elements_map(bootstrap)
         id_to_code, _, code_to_short = self._get_team_maps(bootstrap)
 
@@ -897,8 +903,11 @@ class SeasonManager:
                 tid = f[side]
                 code = id_to_code.get(tid)
                 opp_name = id_to_short.get(f[opp_side], "?")
-                if code is not None and code not in result:
-                    result[code] = f"{opp_name} ({tag})"
+                if code is not None:
+                    existing = result.get(code, "")
+                    fixture_str = f"{opp_name} ({tag})"
+                    # Append for DGW (multiple fixtures in same GW)
+                    result[code] = f"{existing} + {fixture_str}" if existing else fixture_str
         return result
 
     def get_action_plan(self, manager_id: int) -> dict:
@@ -1811,8 +1820,10 @@ class SeasonManager:
         recommendations = self.db.get_recommendations(season_id)
         outcomes = self.db.get_outcomes(season_id)
 
-        # Compute available chips
-        used_chip_names = {c["chip_used"] for c in chips_used}
+        # Compute available chips with half-season reset awareness
+        # WC/FH reset at GW20 (available once per half: GW1-19 and GW20-38)
+        # BB/TC are one-time only across the whole season
+        current_gw = season.get("current_gw", 1)
         all_chips_list = [
             {"name": "wildcard", "label": "Wildcard"},
             {"name": "freehit", "label": "Free Hit"},
@@ -1821,11 +1832,18 @@ class SeasonManager:
         ]
         chips_status = []
         for chip in all_chips_list:
-            used_in = next((c["gameweek"] for c in chips_used if c["chip_used"] == chip["name"]), None)
+            chip_events = [c["gameweek"] for c in chips_used if c["chip_used"] == chip["name"]]
+            # Determine which usage matters for current half
+            if current_gw <= 19:
+                used = any(e <= 19 for e in chip_events)
+                used_in = next((e for e in chip_events if e <= 19), None)
+            else:
+                used = any(e >= 20 for e in chip_events)
+                used_in = next((e for e in chip_events if e >= 20), None)
             chips_status.append({
                 "name": chip["name"],
                 "label": chip["label"],
-                "used": chip["name"] in used_chip_names,
+                "used": used,
                 "used_gw": used_in,
             })
 

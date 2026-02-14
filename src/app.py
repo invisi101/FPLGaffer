@@ -138,10 +138,10 @@ def _get_next_gw() -> int | None:
     for event in data.get("events", []):
         if event.get("is_next"):
             return event["id"]
-    # If no 'is_next', fall back to the one after 'is_current'
+    # If no 'is_next', fall back to the one after 'is_current' (capped at 38)
     for event in data.get("events", []):
         if event.get("is_current"):
-            return event["id"] + 1
+            return min(event["id"] + 1, 38)
     return None
 
 
