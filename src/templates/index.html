@@ -2866,6 +2866,10 @@ function renderActionPlan(plan) {
       <div class="action-step-icon" style="color:${color}">${icon}</div>
       <div>${step.description}</div>
     </div>`;
+    // Render WC/FH squad pitch below the chip step
+    if (step.action === 'chip' && step.new_squad && step.new_squad.length) {
+      html += renderChipSquadPitch(step.new_squad, step.description);
+    }
   });
 
   if (plan.rationale) {
@@ -2882,6 +2886,60 @@ function renderActionPlan(plan) {
 
   // Re-render locked squad if exists
   if (lockedGWSquad) renderLockedSquadPitch(lockedGWSquad);
+}
+
+function renderChipSquadPitch(squad, chipLabel) {
+  const starters = squad.filter(p => p.starter);
+  const bench = squad.filter(p => !p.starter);
+  const totalPts = starters.reduce((s, p) => s + (p.predicted_next_gw_points || 0), 0);
+
+  function card(p) {
+    const pts = p.predicted_next_gw_points != null ? Number(p.predicted_next_gw_points).toFixed(1) : '-';
+    let badge = '';
+    let cardStyle = '';
+    if (p.is_captain) {
+      cardStyle = 'border:2px solid #ef4444;box-shadow:0 0 8px rgba(239,68,68,0.4)';
+      badge = ' <span class="captain-badge">(C)</span>';
+    } else if (p.is_vice_captain) {
+      badge = ' <span class="vc-badge">(V)</span>';
+    }
+    return `<div class="pitch-card" style="${cardStyle}">
+      <div class="p-name">${p.web_name || '-'}${badge}</div>
+      <div class="p-team">${p.team || ''} &middot; ${p.cost != null ? Number(p.cost).toFixed(1) + 'm' : ''}</div>
+      <div class="p-pts" style="color:var(--green)">${pts}</div>
+      ${p.opponent ? `<span style="font-size:10px;color:var(--text2)">${p.opponent}</span>` : ''}
+    </div>`;
+  }
+
+  const fwd = starters.filter(p => p.position === 'FWD');
+  const mid = starters.filter(p => p.position === 'MID');
+  const def_ = starters.filter(p => p.position === 'DEF');
+  const gkp = starters.filter(p => p.position === 'GKP');
+
+  let html = `<div class="action-plan-card" style="margin-top:8px;margin-bottom:8px;border:1px solid var(--green);border-radius:8px">
+    <h4 style="color:var(--green)">${chipLabel} Squad (Predicted: ${totalPts.toFixed(1)} pts)</h4>
+    <div class="pitch">
+      <div class="pitch-bottom-box"></div>
+      <div class="pitch-row fwd">${fwd.map(p => card(p)).join('')}</div>
+      <div class="pitch-row mid">${mid.map(p => card(p)).join('')}</div>
+      <div class="pitch-row def">${def_.map(p => card(p)).join('')}</div>
+      <div class="pitch-row gkp">${gkp.map(p => card(p)).join('')}</div>
+    </div>`;
+
+  if (bench.length) {
+    html += `<div class="bench-area"><div class="bench-label">Bench</div>
+      <div class="bench-row">${bench.map(p => {
+        const pred = p.predicted_next_gw_points != null ? Number(p.predicted_next_gw_points).toFixed(1) : '-';
+        return `<div class="bench-card">
+          <div class="p-name">${p.web_name || '-'}</div>
+          <div class="p-team">${p.team || ''} &middot; ${p.cost != null ? Number(p.cost).toFixed(1) + 'm' : ''}</div>
+          <div class="p-pts" style="font-size:13px">${pred}</div>
+        </div>`;
+      }).join('')}</div></div>`;
+  }
+
+  html += '</div>';
+  return html;
 }
 
 function copyActionPlan() {
@@ -2914,80 +2972,101 @@ function lockInGWTeam() {
     alert('Import your squad and generate a recommendation first.');
     return;
   }
-  const squad = JSON.parse(JSON.stringify(lastMyTeamData.squad));
   const steps = lastActionPlanData.steps || [];
   const checkedEls = document.querySelectorAll('.action-step-check.checked');
 
-  const transferredInIds = new Set();
-
-  checkedEls.forEach(el => {
-    const stepDiv = el.closest('.action-step');
-    const idx = parseInt(stepDiv.dataset.stepIndex, 10);
-    const step = steps[idx];
-    if (!step) return;
-
-    if (step.action === 'transfer' && step.player_out && step.player_in) {
-      const outId = step.player_out.player_id;
-      const si = squad.findIndex(p => p.player_id === outId);
-      if (si !== -1) {
-        const old = squad[si];
-        squad[si] = {
-          player_id: step.player_in.player_id,
-          web_name: step.player_in.web_name,
-          position: step.player_in.position,
-          team: step.player_in.team,
-          team_code: step.player_in.team_code,
-          cost: step.player_in.cost,
-          predicted_next_gw_points: step.player_in.predicted_next_gw_points,
-          opponent: step.player_in.opponent || '',
-          starter: old.starter,
-          is_captain: old.is_captain,
-          is_vice_captain: old.is_vice_captain,
-          event_points: null,
-          status: 'a',
-        };
-        transferredInIds.add(step.player_in.player_id);
-      }
-    } else if (step.action === 'captain' && step.captain_id) {
-      squad.forEach(p => {
-        p.is_captain = (p.player_id === step.captain_id);
-      });
-    }
-  });
-
-  // Promote transferred-in bench players over weaker same-position starters
-  for (const pid of transferredInIds) {
-    const p = squad.find(q => q.player_id === pid);
-    if (!p || p.starter) continue;
-    const samePos = squad.filter(q => q.position === p.position && q.starter && !transferredInIds.has(q.player_id));
-    if (!samePos.length) continue;
-    samePos.sort((a, b) => (a.predicted_next_gw_points || 0) - (b.predicted_next_gw_points || 0));
-    const weakest = samePos[0];
-    if ((p.predicted_next_gw_points || 0) > (weakest.predicted_next_gw_points || 0)) {
-      weakest.starter = false;
-      p.starter = true;
-    }
-  }
-
-  // Ensure captain is always a starter
-  const cap = squad.find(p => p.is_captain);
-  if (cap && !cap.starter) {
-    const samePos = squad.filter(q => q.position === cap.position && q.starter);
-    if (samePos.length) {
-      samePos.sort((a, b) => (a.predicted_next_gw_points || 0) - (b.predicted_next_gw_points || 0));
-      samePos[0].starter = false;
-      cap.starter = true;
-    }
-  }
-
-  // Check if Bench Boost is checked
+  // Check if a WC/FH chip step with new_squad is checked
+  let wcFhSquad = null;
   let benchBoost = false;
   checkedEls.forEach(el => {
     const stepDiv = el.closest('.action-step');
     const idx = parseInt(stepDiv.dataset.stepIndex, 10);
     const step = steps[idx];
-    if (step && step.action === 'chip' && step.description.includes('Bench Boost')) benchBoost = true;
+    if (!step) return;
+    if (step.action === 'chip' && step.new_squad && step.new_squad.length) {
+      wcFhSquad = step.new_squad;
+    }
+    if (step.action === 'chip' && step.description.includes('Bench Boost')) benchBoost = true;
   });
+
+  let squad;
+  if (wcFhSquad) {
+    // WC/FH: use the full new squad directly
+    squad = JSON.parse(JSON.stringify(wcFhSquad));
+    // Apply captain from checked captain step
+    checkedEls.forEach(el => {
+      const stepDiv = el.closest('.action-step');
+      const idx = parseInt(stepDiv.dataset.stepIndex, 10);
+      const step = steps[idx];
+      if (step && step.action === 'captain' && step.captain_id) {
+        squad.forEach(p => { p.is_captain = (p.player_id === step.captain_id); });
+      }
+    });
+  } else {
+    // Normal flow: apply transfers/captain to current squad
+    squad = JSON.parse(JSON.stringify(lastMyTeamData.squad));
+    const transferredInIds = new Set();
+
+    checkedEls.forEach(el => {
+      const stepDiv = el.closest('.action-step');
+      const idx = parseInt(stepDiv.dataset.stepIndex, 10);
+      const step = steps[idx];
+      if (!step) return;
+
+      if (step.action === 'transfer' && step.player_out && step.player_in) {
+        const outId = step.player_out.player_id;
+        const si = squad.findIndex(p => p.player_id === outId);
+        if (si !== -1) {
+          const old = squad[si];
+          squad[si] = {
+            player_id: step.player_in.player_id,
+            web_name: step.player_in.web_name,
+            position: step.player_in.position,
+            team: step.player_in.team,
+            team_code: step.player_in.team_code,
+            cost: step.player_in.cost,
+            predicted_next_gw_points: step.player_in.predicted_next_gw_points,
+            opponent: step.player_in.opponent || '',
+            starter: old.starter,
+            is_captain: old.is_captain,
+            is_vice_captain: old.is_vice_captain,
+            event_points: null,
+            status: 'a',
+          };
+          transferredInIds.add(step.player_in.player_id);
+        }
+      } else if (step.action === 'captain' && step.captain_id) {
+        squad.forEach(p => {
+          p.is_captain = (p.player_id === step.captain_id);
+        });
+      }
+    });
+
+    // Promote transferred-in bench players over weaker same-position starters
+    for (const pid of transferredInIds) {
+      const p = squad.find(q => q.player_id === pid);
+      if (!p || p.starter) continue;
+      const samePos = squad.filter(q => q.position === p.position && q.starter && !transferredInIds.has(q.player_id));
+      if (!samePos.length) continue;
+      samePos.sort((a, b) => (a.predicted_next_gw_points || 0) - (b.predicted_next_gw_points || 0));
+      const weakest = samePos[0];
+      if ((p.predicted_next_gw_points || 0) > (weakest.predicted_next_gw_points || 0)) {
+        weakest.starter = false;
+        p.starter = true;
+      }
+    }
+
+    // Ensure captain is always a starter
+    const cap = squad.find(p => p.is_captain);
+    if (cap && !cap.starter) {
+      const samePos = squad.filter(q => q.position === cap.position && q.starter);
+      if (samePos.length) {
+        samePos.sort((a, b) => (a.predicted_next_gw_points || 0) - (b.predicted_next_gw_points || 0));
+        samePos[0].starter = false;
+        cap.starter = true;
+      }
+    }
+  }
 
   const gw = lastActionPlanData.gameweek || '?';
   const starters = squad.filter(p => p.starter);
@@ -3487,9 +3566,16 @@ function renderChips(chips, chipValues) {
     const statusText = c.used ? `Used GW${c.used_gw}` : 'Available';
     const statusClass = c.used ? '' : 'available';
     const value = chipValues[c.name];
+    let otherHalfHtml = '';
+    if (c.used_other_half) {
+      otherHalfHtml = `<div style="font-size:10px;color:var(--text2);margin-top:2px">Other half: Used GW${c.used_other_gw}</div>`;
+    } else if (c.used_other_gw == null && c.used_other_half === false) {
+      otherHalfHtml = `<div style="font-size:10px;color:var(--text2);margin-top:2px">Other half: Available</div>`;
+    }
     html += `<div class="chip-card ${usedClass}">
       <div class="chip-name">${c.label}</div>
       <div class="chip-status ${statusClass}">${statusText}</div>
+      ${otherHalfHtml}
       ${!c.used && value != null ? `<div class="chip-value">+${value} pts</div>` : ''}
     </div>`;
   });

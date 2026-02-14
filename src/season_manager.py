@@ -394,20 +394,17 @@ class SeasonManager:
                 log("  Evaluating chips across all GWs...")
                 chip_evaluator = ChipEvaluator()
 
-                # Determine available chips
+                # Determine available chips (all chips reset at GW20)
                 chips_used_list = history.get("chips", [])
-                chips_used_names = {c["name"] for c in chips_used_list}
                 available_chips = set()
-                wc_events = [c["event"] for c in chips_used_list if c["name"] == "wildcard"]
-                if next_gw <= 19:
-                    if not any(e <= 19 for e in wc_events):
-                        available_chips.add("wildcard")
-                else:
-                    if not any(e >= 20 for e in wc_events):
-                        available_chips.add("wildcard")
-                for chip in ["freehit", "bboost", "3xc"]:
-                    if chip not in chips_used_names:
-                        available_chips.add(chip)
+                for chip in ["wildcard", "freehit", "bboost", "3xc"]:
+                    chip_events = [c["event"] for c in chips_used_list if c["name"] == chip]
+                    if next_gw <= 19:
+                        if not any(e <= 19 for e in chip_events):
+                            available_chips.add(chip)
+                    else:
+                        if not any(e >= 20 for e in chip_events):
+                            available_chips.add(chip)
 
                 fixture_calendar = self.db.get_fixture_calendar(
                     season_id, from_gw=next_gw,
@@ -436,7 +433,9 @@ class SeasonManager:
                     chip_schedule = synthesizer._plan_chip_schedule(
                         chip_heatmap, chip_synergies, available_chips,
                     )
-                    chip_plan_for_planner = {"chip_gws": chip_schedule}
+                    # Invert chip_schedule from {chip: gw} to {gw: chip}
+                    chip_gws_by_gw = {gw: chip for chip, gw in chip_schedule.items()}
+                    chip_plan_for_planner = {"chip_gws": chip_gws_by_gw}
 
                 multi_week_plan = planner.plan_transfers(
                     current_squad_ids, total_budget, free_transfers,
@@ -496,7 +495,13 @@ class SeasonManager:
         new_squad_json = None
         predicted_points = current_xi_points
 
-        if multi_week_plan and multi_week_plan[0].get("transfers_in"):
+        if multi_week_plan and multi_week_plan[0].get("new_squad"):
+            # WC/FH GW: full squad from scratch
+            gw1 = multi_week_plan[0]
+            predicted_points = gw1.get("predicted_points", current_xi_points)
+            new_squad_json = json.dumps(scrub_nan(gw1["new_squad"]))
+            # No transfer pairs for WC/FH — the full squad is the recommendation
+        elif multi_week_plan and multi_week_plan[0].get("transfers_in"):
             # Use GW+1 from the multi-week plan
             gw1 = multi_week_plan[0]
             predicted_points = gw1.get("predicted_points", current_xi_points)
@@ -969,11 +974,43 @@ class SeasonManager:
                 "wildcard": "Wildcard", "freehit": "Free Hit",
                 "bboost": "Bench Boost", "3xc": "Triple Captain",
             }
-            steps.append({
+            chip_step = {
                 "action": "chip",
                 "description": f"Activate {chip_labels.get(chip_suggestion, chip_suggestion)}",
                 "priority": priority,
-            })
+            }
+
+            # For WC/FH, include the full new squad
+            if chip_suggestion in ("wildcard", "freehit"):
+                raw_squad = rec.get("new_squad_json")
+                if raw_squad:
+                    try:
+                        squad_players = json.loads(raw_squad)
+                        # Enrich each player with team/opponent
+                        enriched = []
+                        for p in squad_players:
+                            pid = p.get("player_id")
+                            el = elements_map.get(pid, {})
+                            tc = p.get("team_code") or id_to_code.get(el.get("team"))
+                            team = code_to_short.get(tc, p.get("team", ""))
+                            opp = fixture_map.get(tc, "")
+                            enriched.append({
+                                "player_id": pid,
+                                "web_name": p.get("web_name") or el.get("web_name", "?"),
+                                "position": p.get("position") or el.get("position", ""),
+                                "team": team,
+                                "cost": p.get("cost"),
+                                "predicted_next_gw_points": p.get("predicted_points") or p.get("predicted_next_gw_points"),
+                                "starter": p.get("starter", False),
+                                "is_captain": p.get("is_captain", False),
+                                "is_vice_captain": p.get("is_vice_captain", False),
+                                "opponent": opp,
+                            })
+                        chip_step["new_squad"] = enriched
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
+            steps.append(chip_step)
             priority += 1
 
         # Bench order hint
@@ -1280,24 +1317,18 @@ class SeasonManager:
         import pandas as pd
 
         chips_used_list = history.get("chips", [])
-        chips_used_names = {c["name"] for c in chips_used_list}
 
-        # Determine which chips are still available
+        # Determine which chips are still available (all chips reset at GW20)
         available = set()
-        # Wildcards: one per half (GW1-19, GW20-38)
-        wc_events = [c["event"] for c in chips_used_list if c["name"] == "wildcard"]
-        current_gw = bootstrap.get("events", [{}])
         next_gw = self._get_next_gw(bootstrap) or 1
-        if next_gw <= 19:
-            if not any(e <= 19 for e in wc_events):
-                available.add("wildcard")
-        else:
-            if not any(e >= 20 for e in wc_events):
-                available.add("wildcard")
-
-        for chip in ["freehit", "bboost", "3xc"]:
-            if chip not in chips_used_names:
-                available.add(chip)
+        for chip in ["wildcard", "freehit", "bboost", "3xc"]:
+            chip_events = [c["event"] for c in chips_used_list if c["name"] == chip]
+            if next_gw <= 19:
+                if not any(e <= 19 for e in chip_events):
+                    available.add(chip)
+            else:
+                if not any(e >= 20 for e in chip_events):
+                    available.add(chip)
 
         target_col = "predicted_next_gw_points"
         chip_values = {}

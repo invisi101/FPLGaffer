@@ -1448,7 +1448,15 @@ def api_season_chips():
         return jsonify({"error": "No active season."}), 404
 
     chips_used = _season_db.get_chips_status(season["id"])
-    used_names = {c["chip_used"] for c in chips_used}
+
+    # Determine current half from next GW
+    next_gw = _get_next_gw()
+    if next_gw is None:
+        next_gw = 1
+    current_half_start = 1 if next_gw <= 19 else 20
+    current_half_end = 19 if next_gw <= 19 else 38
+    other_half_start = 20 if next_gw <= 19 else 1
+    other_half_end = 38 if next_gw <= 19 else 19
 
     all_chips = [
         {"name": "wildcard", "label": "Wildcard"},
@@ -1458,11 +1466,19 @@ def api_season_chips():
     ]
     result = []
     for chip in all_chips:
-        used_gw = next((c["gameweek"] for c in chips_used if c["chip_used"] == chip["name"]), None)
+        chip_uses = [c for c in chips_used if c["chip_used"] == chip["name"]]
+        current_half_use = next(
+            (c for c in chip_uses if current_half_start <= c["gameweek"] <= current_half_end), None
+        )
+        other_half_use = next(
+            (c for c in chip_uses if other_half_start <= c["gameweek"] <= other_half_end), None
+        )
         result.append({
             **chip,
-            "used": chip["name"] in used_names,
-            "used_gw": used_gw,
+            "used": current_half_use is not None,
+            "used_gw": current_half_use["gameweek"] if current_half_use else None,
+            "used_other_half": other_half_use is not None,
+            "used_other_gw": other_half_use["gameweek"] if other_half_use else None,
         })
 
     # Get latest recommendation for chip values

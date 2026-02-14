@@ -405,31 +405,40 @@ class MultiWeekPlanner:
                 gw_df = future_predictions[gw]
                 filtered_preds[gw] = gw_df[gw_df["player_id"].isin(top_pool_ids)].copy()
 
-        # Forward simulation: try each FT allocation for GW+1
-        max_use = min(free_transfers, 3)
+        # Check if WC/FH is planned for GW1 — bypass FT loop, solve full squad
+        gw1_chip = None
+        if chip_plan and plan_gws[0] in chip_plan.get("chip_gws", {}):
+            gw1_chip = chip_plan["chip_gws"][plan_gws[0]]
+
         best_path = None
         best_total = -float("inf")
 
-        for use_gw1 in range(0, max_use + 1):
-            # Skip chip GWs — if chip is planned for GW1, don't use FTs
-            if chip_plan and plan_gws[0] in chip_plan.get("chip_gws", {}):
-                chip_name = chip_plan["chip_gws"][plan_gws[0]]
-                if chip_name in ("freehit", "wildcard"):
-                    if use_gw1 > 0:
-                        continue
-
+        if gw1_chip in ("freehit", "wildcard"):
+            # WC/FH: single simulation with full squad from scratch (use_gw1=15)
             path = self._simulate_path(
                 plan_gws, filtered_preds, current_squad_ids,
-                total_budget, free_transfers, use_gw1,
-                price_bonus, fx_lookup,
+                total_budget, free_transfers, 15,
+                price_bonus, fx_lookup, chip_plan=chip_plan,
             )
-            if path is None:
-                continue
-
-            total_pts = sum(step["predicted_points"] for step in path)
-            if total_pts > best_total:
-                best_total = total_pts
+            if path is not None:
+                best_total = sum(step["predicted_points"] for step in path)
                 best_path = path
+        else:
+            # Forward simulation: try each FT allocation for GW+1
+            max_use = min(free_transfers, 3)
+            for use_gw1 in range(0, max_use + 1):
+                path = self._simulate_path(
+                    plan_gws, filtered_preds, current_squad_ids,
+                    total_budget, free_transfers, use_gw1,
+                    price_bonus, fx_lookup, chip_plan=chip_plan,
+                )
+                if path is None:
+                    continue
+
+                total_pts = sum(step["predicted_points"] for step in path)
+                if total_pts > best_total:
+                    best_total = total_pts
+                    best_path = path
 
         if best_path is None:
             return []
@@ -463,7 +472,7 @@ class MultiWeekPlanner:
     def _simulate_path(
         self, plan_gws, filtered_preds, current_squad_ids,
         total_budget, free_transfers, use_gw1,
-        price_bonus, fx_lookup,
+        price_bonus, fx_lookup, chip_plan=None,
     ) -> list[dict] | None:
         """Simulate a transfer path over 5 GWs given use_gw1 transfers in GW1."""
         path = []
@@ -476,6 +485,11 @@ class MultiWeekPlanner:
                 break
 
             gw_df = filtered_preds[gw].copy()
+
+            # Check if this GW has a WC/FH chip planned
+            gw_chip = None
+            if chip_plan:
+                gw_chip = chip_plan.get("chip_gws", {}).get(gw)
 
             # Apply price bonus to predicted_points
             if price_bonus and i == 0:  # Only for immediate GW
@@ -498,6 +512,59 @@ class MultiWeekPlanner:
                     return max(0, (3.0 - fdr) * 0.3)
                 if "team_code" in gw_df.columns:
                     gw_df["predicted_points"] = gw_df["predicted_points"] + gw_df.apply(_fx_bonus, axis=1)
+
+            # WC/FH GWs: solve full squad from scratch
+            if gw_chip in ("wildcard", "freehit"):
+                pool = gw_df.dropna(subset=["predicted_points"])
+                if "position" in pool.columns and "cost" in pool.columns:
+                    cap_col = "captain_score" if "captain_score" in pool.columns else None
+                    result = solve_milp_team(
+                        pool, "predicted_points",
+                        budget=budget, captain_col=cap_col,
+                    )
+                    if result:
+                        pts = result["starting_points"]
+                        new_squad_ids = {p["player_id"] for p in result["players"]}
+
+                        step = {
+                            "gw": gw,
+                            "transfers_in": [],
+                            "transfers_out": [],
+                            "ft_used": 0,
+                            "ft_available": ft,
+                            "predicted_points": round(pts, 2),
+                            "squad_ids": list(new_squad_ids),
+                            "chip": gw_chip,
+                            "new_squad": result["players"],
+                        }
+                        path.append(step)
+
+                        if gw_chip == "wildcard":
+                            # WC permanently changes squad
+                            squad_ids = new_squad_ids
+                            budget = result["total_cost"]
+                        # FH: squad reverts to original next GW
+                        # (squad_ids stays unchanged for subsequent GWs)
+
+                        ft = min(ft + 1, 5)
+                    else:
+                        # Solver failed, keep current squad
+                        squad_preds = gw_df[gw_df["player_id"].isin(squad_ids)]
+                        pts = squad_preds.nlargest(11, "predicted_points")["predicted_points"].sum() if len(squad_preds) >= 11 else 0
+                        path.append({
+                            "gw": gw,
+                            "transfers_in": [],
+                            "transfers_out": [],
+                            "ft_used": 0,
+                            "ft_available": ft,
+                            "predicted_points": round(pts, 2),
+                            "squad_ids": list(squad_ids),
+                            "chip": gw_chip,
+                        })
+                        ft = min(ft + 1, 5)
+                else:
+                    return None
+                continue
 
             if i == 0:
                 use_now = use_gw1
@@ -605,6 +672,11 @@ class MultiWeekPlanner:
         ft_used = step["ft_used"]
         ft_avail = step["ft_available"]
         transfers_in = step.get("transfers_in", [])
+        chip = step.get("chip")
+
+        if chip in ("wildcard", "freehit"):
+            chip_label = "Wildcard" if chip == "wildcard" else "Free Hit"
+            return f"GW{gw}: Activate {chip_label} — full squad rebuild"
 
         if ft_used == 0:
             if ft_avail < 5:
@@ -728,6 +800,8 @@ class PlanSynthesizer:
                 entry["ft_available"] = transfer_step.get("ft_available", 0)
                 entry["transfer_rationale"] = transfer_step.get("rationale", "")
                 entry["predicted_points"] = transfer_step.get("predicted_points", 0)
+                if transfer_step.get("new_squad"):
+                    entry["new_squad"] = transfer_step["new_squad"]
 
             # Captain info
             cap_step = next((c for c in captain_plan if c["gw"] == gw), None)
