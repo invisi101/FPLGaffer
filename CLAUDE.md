@@ -379,6 +379,122 @@ Bugs 1-13 have been fixed. Here's what was wrong and what changed:
 
 ---
 
+## Full Audit Prompt
+
+When the user says **"run full audit"**, execute the following comprehensive audit across the entire codebase. Use parallel agents to cover all files simultaneously. This audit should be run periodically, especially after significant changes.
+
+### Mindset
+
+You are an FPL manager who has entrusted this app with your entire season. Every recommendation — transfers, captains, chips, bench order — must be correct. A single logic bug can cost you hundreds of points over a season. Audit as if your mini-league title depends on it.
+
+### What to check
+
+**1. FPL Rule Compliance**
+Does the code correctly implement every FPL rule? Trace through each rule and find the code that handles it. Look for:
+- Free transfer banking: +1 per GW, max 5, cost -4 per extra transfer
+- Chips: WC and FH preserve FTs at pre-chip count (no reset, no accrual). BB and TC are one-GW only. WC/FH available once per half (GW1-19 and GW20-38). BB/TC one-time only.
+- Captain: doubles points. Vice-captain activates only if captain gets 0 minutes.
+- Squad rules: 15 players, 2 GKP / 5 DEF / 5 MID / 3 FWD, max 3 from any team
+- Formation: 11 starters, 1 GKP, 3-5 DEF, 2-5 MID, 1-3 FWD
+- DGW: player plays twice in one GW, points from both matches summed
+- BGW: team doesn't play, player scores 0
+- Selling prices: you only get 50% of price rises (we use now_cost from public API — note any places this matters)
+- Transfers: hits (-4 per extra transfer) should be subtracted from point calculations where applicable
+
+**2. Data Leakage**
+For every feature that enters the model, trace it back to its source. At GW N (predicting GW N+1), the feature must only use data from GW N-1 and earlier. Look for:
+- Missing `shift(1)` on any rolling/expanding/cumulative calculation
+- Merge keys that allow future data to leak (e.g., merging on gameweek without ensuring the data is from the past)
+- Target variables appearing in feature columns
+- Any feature that could contain information about the match being predicted
+
+**3. Off-by-One Errors**
+These are the most common bugs in this codebase. For every calculation that involves gameweek offsets, time periods, or array indices:
+- Is the shift in the right direction?
+- Does "GW N" mean the same thing everywhere? (Some places: GW N = the GW being predicted. Others: GW N = the current GW whose data we have.)
+- Are loop bounds correct? (< vs <=, range(1, n) vs range(0, n))
+- Cross-season boundaries: does GW 1 of season 2 correctly follow GW 38 of season 1?
+
+**4. State Tracking Across Multi-Step Simulations**
+The multi-week planner, chip evaluator, and season manager all simulate multiple GWs forward. For each simulation:
+- Is budget preserved correctly? (It should not shrink when the solver picks a cheaper squad)
+- Are FTs tracked correctly per FPL rules? (Banking, spending, chip effects)
+- Does the squad update correctly? (WC: permanent. FH: reverts. Normal transfers: permanent.)
+- When the solver fails, does state still advance correctly?
+
+**5. Hardcoded Values That Should Be Dynamic**
+Search for magic numbers (1000, 100, 38, etc.) and ask: should this be a parameter? Common offenders:
+- Budget values (should come from manager's actual bank + squad value)
+- GW limits (38 is correct for PL but should be handled at season boundaries)
+- Thresholds (probability cutoffs, point thresholds, pool sizes)
+
+**6. DGW / BGW Handling**
+DGWs and BGWs are edge cases that break a lot of logic. For every place that processes per-GW data:
+- DGW: Are stats summed (not averaged) for the GW? Are predictions summed across both fixtures?
+- BGW: Are teams with no fixture handled gracefully? (No division by zero, no missing data)
+- Fixture maps: Do they show all fixtures for DGW teams, not just the first?
+
+**7. Injury / Availability Propagation**
+When a player is flagged as injured or unavailable:
+- Is EVERY prediction column zeroed? (predicted_points, captain_score, Q80, decomposed components)
+- Does it propagate to ALL future GWs, not just the immediate one?
+- Is the player excluded from transfer recommendations, captain picks, AND chip evaluations?
+
+**8. Cache and Staleness**
+The app caches FPL API data (30min) and GitHub data (6h). For every place that reads cached data:
+- Is the data fresh enough for the operation? (Recording results needs live data, not 30-min-old cache)
+- Could stale data cause incorrect recommendations?
+- Are there race conditions between cache refresh and data usage?
+
+**9. Database Integrity**
+- Do any INSERT/UPDATE operations risk CASCADE deletes or orphaned rows?
+- Are there any SQL operations that silently discard data on conflict?
+- Do all queries filter by the correct season_id / manager_id?
+
+**10. Edge Cases and Boundaries**
+- Season start (GW1): Are there division-by-zero or empty-data issues when no history exists?
+- Season end (GW38): Does `_get_next_gw` return 39? Do planners try to plan beyond GW38?
+- New player (no history): Do rolling features handle NaN gracefully?
+- Transferred-out player: Does data stop cleanly or does stale data leak?
+- Manager with 0 bank: Does the solver handle budget = squad_value correctly?
+- Empty prediction DataFrame: Does every function handle this without crashing?
+
+**11. Objective Function Correctness (MILP Solver)**
+The solver is the heart of every recommendation. Verify:
+- Captain bonus: Does it correctly value doubling the captain's points?
+- Bench weight (0.1): Is this applied consistently and does it make sense?
+- Are all constraints correct? (Position counts, team cap, formation, budget)
+- When captain_col is provided, are the 3n variables (squad, starter, captain) correctly linked?
+
+**12. Common Sense Check**
+Step back from the code and think like an FPL manager:
+- Would you trust these recommendations with your actual team?
+- Does the captain pick make sense? (Highest-scoring available player, not injured, good fixture)
+- Does the transfer plan make sense? (Not selling players with great upcoming fixtures)
+- Does the chip timing make sense? (BB in DGW, FH in BGW, WC before fixture swing)
+- Are price change predictions actually influencing transfer timing?
+
+### Output format
+
+For each issue found, report:
+1. **Severity**: Critical / High / Medium
+2. **File and line number(s)**
+3. **What's wrong** (concrete, specific)
+4. **What should happen** (expected behavior)
+5. **Suggested fix** (code-level)
+6. **Unintended consequences** of the fix (what else might break)
+
+Group findings by file. Deduplicate — if the same pattern appears in multiple places, report it once with all locations listed.
+
+### Important notes
+
+- Do NOT report style issues, missing docstrings, or code quality suggestions. Only report things that produce wrong results or could cause failures.
+- Do NOT re-report bugs that are already listed in the "Bugs Fixed" section above — they're already resolved.
+- DO check that previous fixes are still correct and haven't introduced new issues.
+- If you're unsure whether something is a bug, include it with a note explaining your uncertainty.
+
+---
+
 ## Remaining TODO: Rethink Backtesting & Feature Visualization
 
 The following 4 UI buttons have been **removed from the frontend** (but all backend code is preserved):
