@@ -19,15 +19,26 @@ Built with Python, Flask, scipy MILP, and a single-file vanilla JS frontend.
 
 ## Installation
 
-### Windows (standalone EXE)
+### Windows
 
-1. Download `FPL-Predictor-Windows.zip` from the [latest release](https://github.com/invisi101/fplmanager/releases/latest)
+1. Download `Gaffer-Windows.zip` from the [latest release](https://github.com/invisi101/fplmanager/releases/latest)
 2. Extract the zip
-3. Run `FPL Predictor.exe` — the app opens in your browser automatically
+3. Run `Gaffer.exe` — the app opens in your browser automatically
 
 No Python installation required.
 
 ### Mac
+
+**Option A — Download the app:**
+
+1. Download `Gaffer-macOS.zip` from the [latest release](https://github.com/invisi101/fplmanager/releases/latest)
+2. Extract the zip
+3. Move `Gaffer.app` to your Applications folder
+4. Launch from Spotlight, Launchpad, or the Applications folder — the app opens in your browser automatically
+
+No Python installation required.
+
+**Option B — Build from source:**
 
 ```bash
 git clone https://github.com/invisi101/fplmanager.git
@@ -35,7 +46,7 @@ cd fplmanager
 ./setup-mac.sh
 ```
 
-This creates a virtual environment, installs dependencies, and installs **Gaffer.app** to your Applications folder. Launch it from Spotlight, Launchpad, or the Applications folder — the app opens in your browser automatically.
+This creates a virtual environment, installs dependencies, and installs **Gaffer.app** to your Applications folder.
 
 ### Linux
 
