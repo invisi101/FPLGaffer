@@ -1,5 +1,5 @@
 #!/bin/bash
-# Creates Gaffer.app in /Applications that launches FPL Gaffer Brain
+# Creates Gaffer.app in /Applications that launches FPL Gaffer - the brAIn
 
 set -e
 
