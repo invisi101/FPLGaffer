@@ -43,8 +43,8 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=True,
-    icon="fpl-predictor.ico",
+    console=False,
+    icon="Gaffer.icns",
 )
 
 coll = COLLECT(
@@ -55,4 +55,11 @@ coll = COLLECT(
     upx=True,
     upx_exclude=[],
     name="Gaffer",
+)
+
+app = BUNDLE(
+    coll,
+    name="Gaffer.app",
+    icon="Gaffer.icns",
+    bundle_identifier="com.gaffer.fplmanager",
 )

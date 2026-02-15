@@ -1,4 +1,4 @@
-name: Build Windows EXE
+name: Build Gaffer
 
 on:
   release:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  build-windows:
     runs-on: windows-latest
 
     steps:
@@ -27,17 +27,50 @@ jobs:
         run: pyinstaller fpl-predictor.spec
 
       - name: Zip output folder
-        run: Compress-Archive -Path "dist/FPL Predictor" -DestinationPath FPL-Predictor-Windows.zip
+        run: Compress-Archive -Path "dist/Gaffer" -DestinationPath Gaffer-Windows.zip
 
       - name: Upload to release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
-          files: FPL-Predictor-Windows.zip
+          files: Gaffer-Windows.zip
 
       - name: Upload as artifact (manual runs)
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
-          name: FPL-Predictor-Windows
-          path: FPL-Predictor-Windows.zip
+          name: Gaffer-Windows
+          path: Gaffer-Windows.zip
+
+  build-macos:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt pyinstaller
+
+      - name: Build with PyInstaller
+        run: pyinstaller gaffer-mac.spec
+
+      - name: Zip output folder
+        run: cd dist && zip -r ../Gaffer-macOS.zip Gaffer.app
+
+      - name: Upload to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Gaffer-macOS.zip
+
+      - name: Upload as artifact (manual runs)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Gaffer-macOS
+          path: Gaffer-macOS.zip

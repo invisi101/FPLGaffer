@@ -19,7 +19,7 @@ def open_browser():
 if __name__ == "__main__":
     multiprocessing.freeze_support()
     try:
-        print(f"Starting FPL Points Predictor at {URL}")
+        print(f"Starting Gaffer at {URL}")
         print("Close this window to stop the server.\n")
 
         threading.Thread(target=open_browser, daemon=True).start()
