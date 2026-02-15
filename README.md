@@ -21,7 +21,7 @@ Built with Python, Flask, scipy MILP, and a single-file vanilla JS frontend.
 
 ### Windows
 
-1. Download `Gaffer-Windows.zip` from the [latest release](https://github.com/invisi101/fplmanager/releases/latest)
+1. Download `Gaffer-Windows.zip` from the [latest release](https://github.com/invisi101/FPLGaffer/releases/latest)
 2. Extract the zip
 3. Run `Gaffer.exe` — the app opens in your browser automatically
 
@@ -31,7 +31,7 @@ No Python installation required.
 
 **Option A — Download the app:**
 
-1. Download `Gaffer-macOS.zip` from the [latest release](https://github.com/invisi101/fplmanager/releases/latest)
+1. Download `Gaffer-macOS.zip` from the [latest release](https://github.com/invisi101/FPLGaffer/releases/latest)
 2. Extract the zip
 3. Move `Gaffer.app` to your Applications folder
 4. Launch from Spotlight, Launchpad, or the Applications folder — the app opens in your browser automatically
@@ -41,7 +41,7 @@ No Python installation required.
 **Option B — Build from source:**
 
 ```bash
-git clone https://github.com/invisi101/fplmanager.git
+git clone https://github.com/invisi101/FPLGaffer.git
 cd fplmanager
 ./setup-mac.sh
 ```
@@ -51,7 +51,7 @@ This creates a virtual environment, installs dependencies, and installs **Gaffer
 ### Linux
 
 ```bash
-git clone https://github.com/invisi101/fplmanager.git
+git clone https://github.com/invisi101/FPLGaffer.git
 cd fplmanager
 python3 -m venv .venv
 source .venv/bin/activate

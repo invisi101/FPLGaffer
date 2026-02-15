@@ -16,7 +16,7 @@ Every decision (transfer, captain, bench order, chip) is made in context of the 
 
 ## Repos
 
-- **This project**: `https://github.com/invisi101/fplmanager` (active development)
+- **This project**: `https://github.com/invisi101/FPLGaffer` (active development)
 - **Original predictor**: `https://github.com/invisi101/fplxti` (previous project this was forked from)
 
 ## Environment
