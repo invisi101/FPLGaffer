@@ -1,4 +1,4 @@
-# FPL Gaffer Brain — Claude Code Notes
+# FPL Gaffer - the brAIn — Claude Code Notes
 
 ## Project Goal
 
