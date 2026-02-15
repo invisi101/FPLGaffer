@@ -123,7 +123,7 @@ def _fetch_csv(url: str, cache_file: Path, force: bool = False) -> pd.DataFrame:
         # Bug 60 fix: validate as CSV before writing to cache to prevent
         # cache poisoning from non-CSV responses (e.g. rate-limit HTML pages)
         df = pd.read_csv(io.StringIO(resp.text))
-        if df.empty or len(df.columns) < 2:
+        if len(df.columns) < 2:
             raise ValueError(f"Response does not look like valid CSV ({len(df.columns)} cols)")
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
         cache_file.write_text(resp.text, encoding="utf-8")
@@ -247,7 +247,7 @@ def fetch_season_data(season: str, force: bool = False) -> dict[str, pd.DataFram
             cache_file = _cache_path(f"{season}_{key}.csv")
             try:
                 data[key] = _fetch_csv(url, cache_file, force=force)
-            except requests.RequestException as e:
+            except (requests.RequestException, ValueError) as e:
                 print(f"  Warning: could not fetch {season}/{key}: {e}")
     else:
         # Detect max GW first (also caches playerstats.csv)
@@ -259,7 +259,7 @@ def fetch_season_data(season: str, force: bool = False) -> dict[str, pd.DataFram
             cache_file = _cache_path(f"{season}_{key}.csv")
             try:
                 data[key] = _fetch_csv(url, cache_file, force=force)
-            except requests.RequestException as e:
+            except (requests.RequestException, ValueError) as e:
                 print(f"  Warning: could not fetch {season}/{key}: {e}")
 
         for filename in PER_GW_GW_FILES:
@@ -273,7 +273,7 @@ def fetch_season_data(season: str, force: bool = False) -> dict[str, pd.DataFram
                     if "gameweek" not in df.columns:
                         df["gameweek"] = gw
                     frames.append(df)
-                except requests.RequestException:
+                except (requests.RequestException, ValueError):
                     pass
             if frames:
                 data[key] = pd.concat(frames, ignore_index=True)
