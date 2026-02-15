@@ -379,6 +379,25 @@ Bugs 1-13 have been fixed. Here's what was wrong and what changed:
 
 ---
 
+## Windows EXE Build Pipeline (Feb 2025)
+
+Added a GitHub Actions workflow to build a Windows executable via PyInstaller, and fixed several issues in the spec and launcher that would have caused build or runtime failures.
+
+### What was added
+- **`.github/workflows/build-exe.yml`** — Triggers on release (created) or manual `workflow_dispatch`. Runs on `windows-latest`, Python 3.12. Installs deps + PyInstaller, builds from `fpl-predictor.spec`, zips `dist/FPL Predictor`, uploads to release or as artifact.
+
+### Bugs fixed
+- **`fpl-predictor.spec` — stale hiddenimport**: `src.benchmark` was listed but doesn't exist (leftover from the old fplxti repo). Replaced with `src.strategy` which does exist and was missing.
+- **`fpl-predictor.spec` — xgboost testing crash**: `collect_all("xgboost")` imported `xgboost.testing` which calls `pytest.importorskip("hypothesis")`. In CI (no hypothesis installed), this crashes PyInstaller. Fixed with `filter_submodules=lambda name: "testing" not in name`. No impact on runtime — xgboost.testing is only used by xgboost's own test suite.
+- **`launcher.py` — port mismatch**: Launcher used port 9876 but `src/app.py` runs on 9875. Changed both the URL constant and `app.run()` call in launcher to 9875.
+
+### Manual trigger
+```bash
+gh workflow run build-exe.yml
+```
+
+---
+
 ## Full Audit Prompt
 
 When the user says **"run full audit"**, execute the following comprehensive audit across the entire codebase. Use parallel agents to cover all files simultaneously. This audit should be run periodically, especially after significant changes.
