@@ -396,6 +396,27 @@ Added a GitHub Actions workflow to build a Windows executable via PyInstaller, a
 gh workflow run build-exe.yml
 ```
 
+### Releases
+Create a release to trigger the build and attach the zip automatically:
+```bash
+gh release create v1.0.0 --title "v1.0.0" --notes "Release notes here"
+```
+
+---
+
+## Gaffer Launcher & Icon (Feb 2025)
+
+### Mac launcher
+- **`setup-mac.sh`** — Run once after cloning. Creates venv, installs deps, and builds `Gaffer.app` in `/Applications`. The launcher script kills any stale process on port 9875, starts the Flask server, waits for it to be ready, and opens the browser.
+- **`Gaffer.icns`** — Mac app icon (pitch green circle with white G and pitch markings). Bundled into the .app by the setup script.
+- The launcher bakes in the absolute path to the user's clone at install time, so it works from /Applications, Spotlight, or Launchpad.
+
+### Windows icon
+- **`fpl-predictor.ico`** — Same Gaffer icon in ICO format. Referenced by `fpl-predictor.spec` and embedded in the Windows EXE at build time.
+
+### Web header icon
+- The `index.html` header logo is the original purple SVG with a green "G" added in the center circle.
+
 ---
 
 ## Full Audit Prompt
