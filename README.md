@@ -1,4 +1,4 @@
-# FPL Gaffer Brain
+# FPL Gaffer - the brAIn
 
 Autonomous Fantasy Premier League manager powered by XGBoost predictions and MILP optimization. Plans transfers, captaincy, and chip strategy across a rolling 5-gameweek horizon.
 
