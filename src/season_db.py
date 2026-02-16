@@ -2,10 +2,15 @@
 
 import json
 import sqlite3
+import sys
 from contextlib import contextmanager
 from pathlib import Path
 
-DB_PATH = Path(__file__).resolve().parent.parent / "output" / "season.db"
+if getattr(sys, "frozen", False):
+    _BASE = Path(sys.executable).parent
+else:
+    _BASE = Path(__file__).resolve().parent.parent
+DB_PATH = _BASE / "output" / "season.db"
 
 
 class SeasonDB:

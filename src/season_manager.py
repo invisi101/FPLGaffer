@@ -1,6 +1,7 @@
 """Business logic for season-long FPL management."""
 
 import json
+import sys
 import time
 from pathlib import Path
 
@@ -26,7 +27,11 @@ from src.strategy import (
 
 ELEMENT_TYPE_MAP = {1: "GKP", 2: "DEF", 3: "MID", 4: "FWD"}
 ALL_CHIPS = {"wildcard", "freehit", "bboost", "3xc"}
-OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output"
+if getattr(sys, "frozen", False):
+    _BASE = Path(sys.executable).parent
+else:
+    _BASE = Path(__file__).resolve().parent.parent
+OUTPUT_DIR = _BASE / "output"
 
 
 def scrub_nan_recursive(obj):
