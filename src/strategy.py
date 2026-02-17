@@ -794,7 +794,9 @@ class MultiWeekPlanner:
                                  "web_name": p.get("web_name", "") or "",
                                  "position": p.get("position", "") or "",
                                  "cost": p.get("cost") or 0,
-                                 "predicted_points": round(p.get("predicted_points") or 0, 2)}
+                                 "team_code": p.get("team_code"),
+                                 "predicted_points": round(p.get("predicted_points") or 0, 2),
+                                 "captain_score": round(p.get("captain_score") or 0, 2)}
                                 for p in result["players"] if p["player_id"] in transfers_in
                             ],
                             "transfers_out": [

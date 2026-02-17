@@ -776,6 +776,12 @@ def api_gw_compare():
     best_starters_pts = [p.get("actual", 0) or 0 for p in best_result["starters"]]
     best_captain_pts = max(best_starters_pts) if best_starters_pts else 0
     best_starting_actual = round(sum(best_starters_pts) + best_captain_pts, 1)
+    # Mark best captain on the best team for frontend display
+    for p in best_result["starters"]:
+        if (p.get("actual", 0) or 0) == best_captain_pts and best_captain_pts > 0:
+            p["is_captain"] = True
+            p["multiplier"] = 2
+            break  # only one captain
 
     # Overlap between manager starters and best starters
     my_ids = {p["player_id"] for p in my_starters}
@@ -1872,65 +1878,19 @@ def api_season_strategic_plan():
         return jsonify({"error": "No strategic plan generated yet."}), 404
 
     plan = {}
-    heatmap = {}
     try:
         plan = json.loads(plan_row.get("plan_json") or "{}")
     except (json.JSONDecodeError, TypeError):
         pass
-    try:
-        heatmap = json.loads(plan_row.get("chip_heatmap_json") or "{}")
-    except (json.JSONDecodeError, TypeError):
-        pass
-
     changelog = _season_db.get_plan_changelog(season["id"], limit=20)
 
     return jsonify({
         "plan": plan,
-        "chip_heatmap": heatmap,
         "as_of_gw": plan_row.get("as_of_gw"),
         "created_at": plan_row.get("created_at"),
         "changelog": changelog,
     })
 
-
-@app.route("/api/season/chip-heatmap")
-def api_season_chip_heatmap():
-    """Chip values across remaining GWs."""
-    manager_id = request.args.get("manager_id")
-    if not manager_id:
-        return jsonify({"error": "manager_id is required."}), 400
-    try:
-        manager_id = int(manager_id)
-    except (TypeError, ValueError):
-        return jsonify({"error": "manager_id must be an integer."}), 400
-
-    season = _season_db.get_season(manager_id)
-    if not season:
-        return jsonify({"error": "No active season."}), 404
-
-    plan_row = _season_db.get_strategic_plan(season["id"])
-    if not plan_row:
-        return jsonify({"error": "No strategic plan generated yet."}), 404
-
-    heatmap = {}
-    try:
-        heatmap = json.loads(plan_row.get("chip_heatmap_json") or "{}")
-    except (json.JSONDecodeError, TypeError):
-        pass
-
-    # Find best GW for each chip
-    best_gws = {}
-    for chip, gw_vals in heatmap.items():
-        if gw_vals:
-            # gw_vals keys are strings from JSON
-            best_gw = max(gw_vals.items(), key=lambda x: x[1])
-            best_gws[chip] = {"gw": best_gw[0], "value": best_gw[1]}
-
-    return jsonify({
-        "chip_heatmap": heatmap,
-        "best_gws": best_gws,
-        "as_of_gw": plan_row.get("as_of_gw"),
-    })
 
 
 @app.route("/api/season/action-plan")
@@ -2017,15 +1977,10 @@ def api_preseason_result():
     # Get chip plan
     plan_row = _season_db.get_strategic_plan(season["id"])
     chip_schedule = {}
-    chip_heatmap = {}
     if plan_row:
         try:
             plan = json.loads(plan_row.get("plan_json") or "{}")
             chip_schedule = plan.get("chip_schedule", {})
-        except (json.JSONDecodeError, TypeError):
-            pass
-        try:
-            chip_heatmap = json.loads(plan_row.get("chip_heatmap_json") or "{}")
         except (json.JSONDecodeError, TypeError):
             pass
 
@@ -2034,7 +1989,6 @@ def api_preseason_result():
         "predicted_points": rec.get("predicted_points"),
         "captain": {"id": rec.get("captain_id"), "name": rec.get("captain_name")},
         "chip_schedule": chip_schedule,
-        "chip_heatmap": chip_heatmap,
     })
 
 

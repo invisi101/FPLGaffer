@@ -433,16 +433,36 @@ class SeasonManager:
                 current_snapshot = df[df["gameweek"] == latest_gw].copy()
 
             # Step 1: Multi-GW predictions (GW+1 to GW+8)
+            # For GW+1, use the SAME pred_df the user sees (predictions.csv)
+            # instead of re-running the model, which can produce different numbers.
+            # For GW+2 onwards, run predict_future_range (different fixtures).
             future_predictions = predict_future_range(
                 current_snapshot, df, fixture_context, latest_gw, horizon=8,
             )
 
             if future_predictions:
-                # Enrich predictions with position/cost/team_code/captain_score for solver
+                # Replace GW+1 with pred_df so all downstream consumers
+                # (chip evaluator, transfer planner, captain planner) use
+                # exactly the same numbers shown in the UI.
+                gw1_cols = ["player_id", "predicted_next_gw_points",
+                            "position", "cost", "team_code", "web_name"]
+                if "captain_score" in pred_df.columns:
+                    gw1_cols.append("captain_score")
+                gw1_from_pred = pred_df[
+                    [c for c in gw1_cols if c in pred_df.columns]
+                ].drop_duplicates("player_id").copy()
+                gw1_from_pred["predicted_points"] = gw1_from_pred["predicted_next_gw_points"]
+                gw1_from_pred["confidence"] = 1.0
+                gw1_from_pred["team"] = gw1_from_pred["team_code"].map(code_to_short).fillna("")
+                future_predictions[next_gw] = gw1_from_pred
+
+                # Enrich GW+2..GW+8 with position/cost/team_code/captain_score
                 meta_cols = ["player_id", "position", "cost", "team_code", "web_name"]
                 if "captain_score" in pred_df.columns:
                     meta_cols.append("captain_score")
                 for gw, gw_df in future_predictions.items():
+                    if gw == next_gw:
+                        continue  # already built from pred_df
                     meta = pred_df[meta_cols].drop_duplicates("player_id")
                     enriched = gw_df.merge(meta, on="player_id", how="left")
                     enriched["team"] = enriched["team_code"].map(code_to_short).fillna("")
@@ -1144,6 +1164,7 @@ class SeasonManager:
             # Normalize predicted points field
             pts = raw.get("predicted_next_gw_points") or raw.get("predicted_points")
             d["predicted_next_gw_points"] = pts
+            d["captain_score"] = raw.get("captain_score")
             # Opponent lookup from fixture map
             d["opponent"] = fixture_map.get(team_code, "") if team_code else ""
             return d

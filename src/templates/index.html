@@ -1561,7 +1561,7 @@
         <div id="planHealthTriggers" style="font-size:12px;color:var(--text2)"></div>
       </div>
 
-      <p class="inline-help">The strategic plan looks 5 gameweeks ahead. It plans transfers, captains, and chip timing as a unified strategy. <strong>Transfer Timeline</strong> shows who to bring in/out each week. <strong>Captain Plan</strong> pre-selects your captain based on fixtures and upside. <strong>Chip Schedule</strong> optimizes when to play each chip. <strong>Chip Heatmap</strong> shows chip value across all remaining GWs. Click <strong>Generate Plan</strong> to create or refresh.</p>
+      <p class="inline-help">The strategic plan looks 5 gameweeks ahead. It plans transfers, captains, and chip timing as a unified strategy. <strong>Transfer Timeline</strong> shows who to bring in/out each week. <strong>Captain Plan</strong> pre-selects your captain based on fixtures and upside. <strong>Chip Schedule</strong> shows when to play each chip based on fixture difficulty, DGWs/BGWs, and squad strength. Click <strong>Generate Plan</strong> to create or refresh.</p>
 
       <div style="display:flex;gap:8px;margin-bottom:16px;align-items:center">
         <button class="btn btn-primary" onclick="generateStrategicPlan()">Generate Plan</button>
@@ -1585,10 +1585,6 @@
       <!-- Chip Schedule -->
       <h4 style="margin-bottom:8px;font-size:14px">Chip Schedule</h4>
       <div id="strategyChipSchedule" style="margin-bottom:20px"></div>
-
-      <!-- Chip Heatmap -->
-      <h4 style="margin-bottom:8px;font-size:14px">Chip Heatmap</h4>
-      <div id="strategyChipHeatmap" style="overflow-x:auto;margin-bottom:20px"></div>
 
       <!-- Plan Changelog -->
       <h4 style="margin-bottom:8px;font-size:14px">Plan Changelog</h4>
@@ -2281,15 +2277,19 @@ function runGWCompare() {
     `;
 
     // Build dual pitches
-    function makeCard(p) {
+    function makeCard(p, isBestSide) {
       const isOverlap = overlapSet.has(p.player_id);
       const overlapClass = isOverlap ? ' overlap' : '';
-      const actual = p.actual != null ? Number(p.actual).toFixed(0) : '-';
-      const captainBadge = p.is_captain ? ' (C)' : p.is_vice_captain ? ' (V)' : '';
+      let pts = p.actual != null ? Number(p.actual) : null;
+      const mult = p.multiplier || 1;
+      // Apply captain/TC multiplier to displayed points
+      if (pts != null && mult > 1) pts = pts * mult;
+      const ptsStr = pts != null ? pts.toFixed(0) : '-';
+      const captainBadge = p.is_captain ? (mult === 3 ? ' (TC)' : ' (C)') : p.is_vice_captain ? ' (V)' : '';
       return `<div class="pitch-card${overlapClass}">
         <div class="p-name">${p.web_name || '?'}${captainBadge}</div>
         <div class="p-team">${p.team || ''} &middot; ${Number(p.cost || 0).toFixed(1)}m</div>
-        <div class="p-pts">${actual}</div>
+        <div class="p-pts">${ptsStr}</div>
       </div>`;
     }
 
@@ -3394,6 +3394,36 @@ function toggleActionCheck(el) {
   btn.style.opacity = anyChecked ? '1' : '0.5';
 }
 
+function optimizeStartingXI(squad) {
+  // Try all valid formations and pick the XI that maximizes predicted_next_gw_points.
+  // Formation: 1 GKP + d DEF + m MID + f FWD where d+m+f=10, d∈[3,5], m∈[2,5], f∈[1,3]
+  const byPos = { GKP: [], DEF: [], MID: [], FWD: [] };
+  squad.forEach(p => { if (byPos[p.position]) byPos[p.position].push(p); });
+  // Sort each position group by predicted points descending
+  for (const pos in byPos) byPos[pos].sort((a, b) => (b.predicted_next_gw_points || 0) - (a.predicted_next_gw_points || 0));
+
+  let bestXI = null, bestPts = -1;
+  for (let d = 3; d <= 5; d++) {
+    for (let m = 2; m <= 5; m++) {
+      const f = 10 - d - m;
+      if (f < 1 || f > 3) continue;
+      if (byPos.GKP.length < 1 || byPos.DEF.length < d || byPos.MID.length < m || byPos.FWD.length < f) continue;
+      const xi = [byPos.GKP[0], ...byPos.DEF.slice(0, d), ...byPos.MID.slice(0, m), ...byPos.FWD.slice(0, f)];
+      const pts = xi.reduce((s, p) => s + (p.predicted_next_gw_points || 0), 0);
+      if (pts > bestPts) { bestPts = pts; bestXI = new Set(xi.map(p => p.player_id)); }
+    }
+  }
+  if (!bestXI) return;
+  squad.forEach(p => { p.starter = bestXI.has(p.player_id); });
+
+  // Set captain to starter with highest captain_score
+  const starters = squad.filter(p => p.starter);
+  starters.sort((a, b) => (b.captain_score || b.predicted_next_gw_points || 0) - (a.captain_score || a.predicted_next_gw_points || 0));
+  squad.forEach(p => { p.is_captain = false; p.is_vice_captain = false; });
+  if (starters.length > 0) starters[0].is_captain = true;
+  if (starters.length > 1) starters[1].is_vice_captain = true;
+}
+
 function lockInGWTeam() {
   if (!lastMyTeamData || !lastMyTeamData.squad || !lastActionPlanData) {
     alert('Import your squad and generate a recommendation first.');
@@ -3420,9 +3450,10 @@ function lockInGWTeam() {
 
   let squad;
   if (wcFhSquad) {
-    // WC/FH: use the full new squad directly
+    // WC/FH: use the full new squad directly, then optimize
     squad = JSON.parse(JSON.stringify(wcFhSquad));
-    // Apply captain from checked captain step
+    optimizeStartingXI(squad);
+    // Apply captain from checked captain step (overrides optimizer)
     checkedEls.forEach(el => {
       const stepDiv = el.closest('.action-step');
       const idx = parseInt(stepDiv.dataset.stepIndex, 10);
@@ -3455,6 +3486,7 @@ function lockInGWTeam() {
             team_code: step.player_in.team_code,
             cost: step.player_in.cost,
             predicted_next_gw_points: step.player_in.predicted_next_gw_points,
+            captain_score: step.player_in.captain_score,
             opponent: step.player_in.opponent || '',
             starter: old.starter,
             is_captain: old.is_captain,
@@ -3471,30 +3503,28 @@ function lockInGWTeam() {
       }
     });
 
-    // Promote transferred-in bench players over weaker same-position starters
-    for (const pid of transferredInIds) {
-      const p = squad.find(q => q.player_id === pid);
-      if (!p || p.starter) continue;
-      const samePos = squad.filter(q => q.position === p.position && q.starter && !transferredInIds.has(q.player_id));
-      if (!samePos.length) continue;
-      samePos.sort((a, b) => (a.predicted_next_gw_points || 0) - (b.predicted_next_gw_points || 0));
-      const weakest = samePos[0];
-      if ((p.predicted_next_gw_points || 0) > (weakest.predicted_next_gw_points || 0)) {
-        weakest.starter = false;
-        p.starter = true;
-      }
-    }
+    // Optimize starting XI: pick best formation from all 15 players
+    optimizeStartingXI(squad);
 
-    // Ensure captain is always a starter
-    const cap = squad.find(p => p.is_captain);
-    if (cap && !cap.starter) {
-      const samePos = squad.filter(q => q.position === cap.position && q.starter);
-      if (samePos.length) {
-        samePos.sort((a, b) => (a.predicted_next_gw_points || 0) - (b.predicted_next_gw_points || 0));
-        samePos[0].starter = false;
-        cap.starter = true;
+    // Re-apply captain from checked captain step (overrides optimizer's pick)
+    checkedEls.forEach(el => {
+      const stepDiv = el.closest('.action-step');
+      const idx = parseInt(stepDiv.dataset.stepIndex, 10);
+      const step = steps[idx];
+      if (step && step.action === 'captain' && step.captain_id) {
+        squad.forEach(p => { p.is_captain = (p.player_id === step.captain_id); });
+        // Ensure captain is a starter
+        const cap = squad.find(p => p.is_captain);
+        if (cap && !cap.starter) {
+          const samePos = squad.filter(q => q.position === cap.position && q.starter);
+          if (samePos.length) {
+            samePos.sort((a, b) => (a.predicted_next_gw_points || 0) - (b.predicted_next_gw_points || 0));
+            samePos[0].starter = false;
+            cap.starter = true;
+          }
+        }
       }
-    }
+    });
   }
 
   const gw = lastActionPlanData.gameweek || '?';
@@ -4556,7 +4586,6 @@ function checkPlanHealth() {
 
 function renderStrategicPlan(data) {
   const plan = data.plan || {};
-  const heatmap = data.chip_heatmap || {};
   const changelog = data.changelog || [];
 
   document.getElementById('strategyPlanStatus').textContent =
@@ -4579,9 +4608,6 @@ function renderStrategicPlan(data) {
 
   // Chip schedule
   renderChipSchedule(plan.chip_schedule || {}, plan.chip_synergies || []);
-
-  // Chip heatmap
-  renderChipHeatmap(heatmap);
 
   // Changelog
   renderChangelog(changelog);
@@ -4699,55 +4725,6 @@ function renderChipSchedule(schedule, synergies) {
   container.innerHTML = html;
 }
 
-function renderChipHeatmap(heatmap) {
-  const container = document.getElementById('strategyChipHeatmap');
-  const chips = Object.keys(heatmap);
-  if (!chips.length) {
-    container.innerHTML = '<p style="color:var(--text2);font-size:13px">No chip heatmap data.</p>';
-    return;
-  }
-
-  // Collect all GWs
-  const allGws = new Set();
-  chips.forEach(chip => {
-    Object.keys(heatmap[chip]).forEach(gw => allGws.add(parseInt(gw)));
-  });
-  const gws = Array.from(allGws).sort((a,b) => a-b);
-
-  // Find global max for color scaling
-  let globalMax = 0;
-  chips.forEach(chip => {
-    Object.values(heatmap[chip]).forEach(v => { if (v > globalMax) globalMax = v; });
-  });
-
-  let html = '<table class="bt-table" style="font-size:12px"><thead><tr><th>Chip</th>';
-  gws.forEach(gw => { html += `<th style="text-align:center;min-width:40px">GW${gw}</th>`; });
-  html += '<th style="text-align:center">Best</th></tr></thead><tbody>';
-
-  chips.forEach(chip => {
-    const vals = heatmap[chip];
-    let bestGw = null, bestVal = -1;
-    Object.entries(vals).forEach(([gw, v]) => {
-      if (v > bestVal) { bestVal = v; bestGw = gw; }
-    });
-
-    html += `<tr><td style="font-weight:600">${chipLabel(chip)}</td>`;
-    gws.forEach(gw => {
-      const v = vals[gw] || vals[String(gw)] || 0;
-      const intensity = globalMax > 0 ? v / globalMax : 0;
-      const bg = intensity > 0.7 ? 'rgba(45,212,160,0.3)'
-        : intensity > 0.4 ? 'rgba(251,191,36,0.2)'
-        : intensity > 0.1 ? 'rgba(255,255,255,0.05)' : 'transparent';
-      const isBest = String(gw) === String(bestGw);
-      const border = isBest ? 'border:2px solid var(--accent);font-weight:700' : '';
-      html += `<td style="text-align:center;background:${bg};${border}">${v.toFixed(1)}</td>`;
-    });
-    html += `<td style="text-align:center;color:var(--accent);font-weight:700">GW${bestGw} (${bestVal.toFixed(1)})</td>`;
-    html += '</tr>';
-  });
-  html += '</tbody></table>';
-  container.innerHTML = html;
-}
 
 function renderChangelog(changelog) {
   const container = document.getElementById('strategyChangelog');
@@ -4865,7 +4842,6 @@ function closeHelp() { document.getElementById('helpOverlay').style.display = 'n
         <li><strong>Transfer Timeline</strong> &mdash; Cards showing planned transfers for each of the next 5 GWs, including free transfer banking</li>
         <li><strong>Captain Plan</strong> &mdash; Pre-selected captains based on fixture difficulty and player upside</li>
         <li><strong>Chip Schedule</strong> &mdash; When to play Wildcard, Free Hit, Bench Boost, and Triple Captain, based on DGW/BGW detection and synergy analysis</li>
-        <li><strong>Chip Heatmap</strong> &mdash; Table showing the estimated value of each chip across all remaining gameweeks</li>
         <li><strong>Plan Health</strong> &mdash; Alerts if injuries, fixture changes, or prediction shifts have invalidated the current plan</li>
       </ul>
     </div>
