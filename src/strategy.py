@@ -152,16 +152,16 @@ class ChipEvaluator:
                     else:
                         bench_pts = squad_preds["predicted_points"].sum() * 0.25 if not squad_preds.empty else 0
                 else:
-                    # Solve MILP for optimal 15-man squad at this GW
-                    pool = gw_df.dropna(subset=["predicted_points"]).copy()
-                    if "position" in pool.columns and "cost" in pool.columns:
-                        result = solve_milp_team(pool, "predicted_points", budget=total_budget)
-                        if result and result.get("bench"):
-                            bench_pts = sum(p.get("predicted_points", 0) for p in result["bench"])
-                        else:
-                            bench_pts = 0
+                    # Use current squad's bench for future GWs too (consistent
+                    # with immediate GW; using full-pool MILP inflates BB value)
+                    squad_preds = gw_df[gw_df["player_id"].isin(current_squad_ids)]
+                    if len(squad_preds) >= 11:
+                        xi = MultiWeekPlanner._select_formation_xi(squad_preds)
+                        xi_ids = set(xi.index)
+                        bench = squad_preds.loc[~squad_preds.index.isin(xi_ids)]
+                        bench_pts = bench["predicted_points"].sum()
                     else:
-                        bench_pts = 0
+                        bench_pts = squad_preds["predicted_points"].sum() * 0.25 if not squad_preds.empty else 0
 
                 # DGW value is already captured in predicted_points (summed across fixtures)
                 values[gw] = round(bench_pts, 1)
@@ -189,15 +189,16 @@ class ChipEvaluator:
         for gw in all_gws:
             if gw in future_predictions:
                 gw_df = future_predictions[gw]
-                # TC can only be used on a player in your squad
+                # TC can only be used on a starter in your squad
                 candidates = gw_df[gw_df["player_id"].isin(current_squad_ids)]
-                if not candidates.empty:
+                xi = MultiWeekPlanner._select_formation_xi(candidates) if not candidates.empty else candidates
+                if not xi.empty:
                     # DGW value already captured in predicted_points (summed across fixtures)
                     # Use captain_score to identify the best captain, but the TC chip value
                     # is the extra predicted_points (one additional multiply: 3x instead of 2x).
-                    score_col = "captain_score" if "captain_score" in candidates.columns else "predicted_points"
-                    best_idx = candidates[score_col].idxmax()
-                    best = candidates.loc[best_idx, "predicted_points"]
+                    score_col = "captain_score" if "captain_score" in xi.columns else "predicted_points"
+                    best_idx = xi[score_col].idxmax()
+                    best = xi.loc[best_idx, "predicted_points"]
                     values[gw] = round(best, 1)
                 else:
                     values[gw] = 0.0
@@ -493,7 +494,7 @@ class MultiWeekPlanner:
 
         Each plan is a list of ints (one per GW) specifying how many FTs to use.
         Chip GWs are fixed at 0 (chip logic handles them separately).
-        Normal GWs try 0 through min(ft, 3) to balance saving vs spending FTs.
+        Normal GWs try 0 through min(ft+1, 3) to allow exploring one hit transfer.
         """
         plans: list[list[int]] = []
         max_per_gw = 3  # Cap per-GW transfers to keep search tractable
@@ -514,7 +515,7 @@ class MultiWeekPlanner:
                 recurse(idx + 1, ft, current)
                 current.pop()
             else:
-                max_use = min(ft, max_per_gw)
+                max_use = min(ft + 1, max_per_gw)
                 for use in range(0, max_use + 1):
                     current.append(use)
                     next_ft = max(min(ft - use + 1, 5), 1)
@@ -702,8 +703,8 @@ class MultiWeekPlanner:
                     return None
                 continue
 
-            # Use the pre-planned FT allocation, clamped to actual available FTs
-            use_now = min(ft_plan[i], ft)
+            # Use the pre-planned FT allocation (may exceed ft by 1 for hit exploration)
+            use_now = ft_plan[i]
 
             if use_now == 0:
                 # No transfers: keep current squad
@@ -1184,6 +1185,16 @@ def detect_plan_invalidation(
                         "severity": "critical",
                         "type": "prediction_shift",
                         "description": f"GW{gw} captain prediction dropped >50% ({old_pts:.1f}→{new_pts:.1f})",
+                        "affected_gws": [gw],
+                    })
+            else:
+                # Captain missing from predictions entirely
+                old_pts = entry.get("captain_points", 0)
+                if old_pts > 0:
+                    triggers.append({
+                        "severity": "critical",
+                        "type": "prediction_shift",
+                        "description": f"GW{gw} captain (id={old_captain_id}) missing from predictions",
                         "affected_gws": [gw],
                     })
 
