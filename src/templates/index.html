@@ -287,21 +287,70 @@
   .pos-tag.MID { color: #a78bfa; }
   .pos-tag.FWD { color: #f87171; }
 
-  .progress-log {
+  .progress-container {
     display: none;
+    margin: 0 24px;
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 8px;
-    margin: 12px 24px;
-    padding: 12px;
+    overflow: hidden;
+  }
+  .progress-container.visible { display: block; }
+
+  .progress-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 14px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .progress-header:hover { background: var(--surface2); }
+  .progress-header-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--text2);
+    min-width: 0;
+  }
+  .progress-spinner {
+    width: 14px; height: 14px;
+    border: 2px solid var(--surface2);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    flex-shrink: 0;
+  }
+  .progress-spinner.done { animation: none; border-color: var(--green); border-top-color: var(--green); }
+  .progress-spinner.error { animation: none; border-color: var(--red); border-top-color: var(--red); }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .progress-msg {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .progress-chevron {
+    font-size: 10px;
+    color: var(--text2);
+    flex-shrink: 0;
+    transition: transform 0.2s;
+  }
+  .progress-container.expanded .progress-chevron { transform: rotate(180deg); }
+
+  .progress-log {
+    display: none;
+    border-top: 1px solid var(--border);
+    padding: 10px 14px;
     max-height: 200px;
     overflow-y: auto;
     font-family: 'SF Mono', Consolas, monospace;
-    font-size: 12px;
+    font-size: 11px;
     color: var(--text2);
-    line-height: 1.8;
+    line-height: 1.7;
+    background: var(--bg);
   }
-  .progress-log.visible { display: block; }
+  .progress-container.expanded .progress-log { display: block; }
 
   .empty-state {
     text-align: center;
@@ -372,7 +421,7 @@
     position: relative;
     width: 100%;
     max-width: 720px;
-    height: 560px;
+    height: 700px;
     margin: 0 auto;
     background: linear-gradient(180deg, #1a6e2e 0%, #1d7a33 10%, #1a6e2e 20%, #1d7a33 30%, #1a6e2e 40%, #1d7a33 50%, #1a6e2e 60%, #1d7a33 70%, #1a6e2e 80%, #1d7a33 90%, #1a6e2e 100%);
     border-radius: 12px;
@@ -421,9 +470,9 @@
     padding: 0 12px;
   }
   .pitch-row.fwd { top: 10px; }
-  .pitch-row.mid { top: 148px; }
-  .pitch-row.def { top: 286px; }
-  .pitch-row.gkp { top: 430px; }
+  .pitch-row.mid { top: 188px; }
+  .pitch-row.def { top: 366px; }
+  .pitch-row.gkp { top: 544px; }
 
   .pitch-card {
     background: rgba(15, 17, 23, 0.88);
@@ -536,7 +585,7 @@
   }
   .compare-side .pitch {
     max-width: 100%;
-    height: 480px;
+    height: 540px;
   }
   .compare-side .pitch-card {
     min-width: 70px;
@@ -549,9 +598,9 @@
   .compare-side .pitch-card .p-cost { font-size: 9px; }
   .compare-side .pitch-card .p-pred { font-size: 9px; color: var(--text2); }
   .compare-side .pitch-row.fwd { top: 8px; }
-  .compare-side .pitch-row.mid { top: 126px; }
-  .compare-side .pitch-row.def { top: 248px; }
-  .compare-side .pitch-row.gkp { top: 372px; }
+  .compare-side .pitch-row.mid { top: 142px; }
+  .compare-side .pitch-row.def { top: 280px; }
+  .compare-side .pitch-row.gkp { top: 420px; }
 
   .pitch-card.injured { border-color: var(--red); opacity: 0.7; }
   .pitch-card.doubtful { border-color: var(--yellow); }
@@ -1213,8 +1262,17 @@
   </div>
 </div>
 
-<!-- Progress Log -->
-<div class="progress-log" id="progressLog"></div>
+<!-- Progress -->
+<div class="progress-container" id="progressContainer">
+  <div class="progress-header" onclick="toggleProgressLog()">
+    <div class="progress-header-left">
+      <div class="progress-spinner" id="progressSpinner"></div>
+      <span class="progress-msg" id="progressMsg">Starting...</span>
+    </div>
+    <span class="progress-chevron" id="progressChevron">▼</span>
+  </div>
+  <div class="progress-log" id="progressLog"></div>
+</div>
 
 <!-- View Tabs -->
 <div class="tabs">
@@ -1475,6 +1533,14 @@
       <div id="priceAlertsContainer"></div>
       <h4 style="margin:16px 0 8px;font-size:14px">Price Predictions</h4>
       <div id="pricePredictionsDisplay"></div>
+      <h4 style="margin:16px 0 8px;font-size:14px">Watchlist</h4>
+      <div style="margin-bottom:8px;position:relative">
+        <div style="display:flex;gap:8px;align-items:center">
+          <input type="text" class="search-box" id="watchlistSearch" placeholder="Search player to add..." oninput="debounceWatchlistSearch()" autocomplete="off">
+        </div>
+        <div id="watchlistDropdown" style="display:none;position:absolute;top:36px;left:0;width:320px;max-height:200px;overflow-y:auto;background:var(--surface2);border:1px solid var(--border);border-radius:6px;z-index:100"></div>
+      </div>
+      <div id="watchlistContainer"></div>
       <h4 style="margin:16px 0 8px;font-size:14px">Price History</h4>
       <div class="season-chart-box"><canvas id="priceHistoryChart" height="200"></canvas></div>
       <h4 style="margin:16px 0 8px;font-size:14px">Squad Prices</h4>
@@ -1581,13 +1647,25 @@ function connectSSE() {
     if (evt === 'task_start') {
       setTaskRunning(true);
     } else if (evt === 'task_done' || evt === 'task_error') {
+      const spinner = document.getElementById('progressSpinner');
+      const pmsg = document.getElementById('progressMsg');
+      if (evt === 'task_done') {
+        pmsg.textContent = 'Complete';
+        spinner.className = 'progress-spinner done';
+      } else {
+        pmsg.textContent = 'Error — click to see details';
+        spinner.className = 'progress-spinner error';
+        // Auto-expand log on error
+        document.getElementById('progressContainer').classList.add('expanded');
+      }
       setTaskRunning(false);
       if (evt === 'task_done') {
-        // Reload predictions and model info
-        loadPredictions();
-        loadModelInfo();
-        // Reload season data if season tab is active
-        if (typeof seasonOnTaskDone === 'function') seasonOnTaskDone();
+        // Brief delay to ensure file writes are flushed before reloading
+        setTimeout(() => {
+          loadPredictions();
+          loadModelInfo(true);
+          if (typeof seasonOnTaskDone === 'function') seasonOnTaskDone();
+        }, 500);
       }
     } else if (evt === 'plan_invalidated') {
       if (typeof checkPlanHealth === 'function') checkPlanHealth();
@@ -1605,16 +1683,21 @@ function connectSSE() {
 function setTaskRunning(running) {
   taskRunning = running;
   const dot = document.getElementById('statusDot');
+  const container = document.getElementById('progressContainer');
   const log = document.getElementById('progressLog');
   const btns = [document.getElementById('btnRefresh'), document.getElementById('btnTrain')];
 
   if (running) {
     dot.classList.add('running');
-    log.classList.add('visible');
+    container.classList.add('visible');
+    container.classList.remove('expanded');
     log.innerHTML = '';
+    document.getElementById('progressMsg').textContent = 'Starting...';
+    document.getElementById('progressSpinner').className = 'progress-spinner';
     btns.forEach(b => b.disabled = true);
   } else {
     dot.classList.remove('running');
+    // Keep container visible so user sees done/error state; hide on next task start
     btns.forEach(b => b.disabled = false);
   }
 }
@@ -1624,6 +1707,13 @@ function appendLog(msg) {
   const line = document.createElement('div');
   line.textContent = msg;
   log.appendChild(line);
+  log.scrollTop = log.scrollHeight;
+  document.getElementById('progressMsg').textContent = msg;
+}
+
+function toggleProgressLog() {
+  document.getElementById('progressContainer').classList.toggle('expanded');
+  const log = document.getElementById('progressLog');
   log.scrollTop = log.scrollHeight;
 }
 
@@ -1656,7 +1746,7 @@ function loadPredictions() {
   fetch('/api/predictions?' + params).then(r => r.json()).then(d => {
     if (d.error && d.players.length === 0) {
       document.getElementById('tableWrap').innerHTML =
-        '<div class="empty-state"><h3>No Predictions Yet</h3><p>Click "Train Models" to generate predictions.</p></div>';
+        '<div class="empty-state"><h3>No Predictions Yet</h3><p>Click <b>Get Latest Data</b> then <b>Train Models</b> above to generate predictions. If you\'ve already done this, click 🔄 to refresh.</p></div>';
       document.getElementById('playerCount').textContent = '';
       return;
     }
@@ -1665,7 +1755,7 @@ function loadPredictions() {
   });
 }
 
-function loadModelInfo() {
+function loadModelInfo(afterTask) {
   fetch('/api/model-info').then(r => r.json()).then(d => {
     // GW badge
     const gwBadge = document.getElementById('gwBadge');
@@ -1687,13 +1777,28 @@ function loadModelInfo() {
 
     // Cache badge
     const badge = document.getElementById('cacheBadge');
-    if (d.cache_age_seconds !== null) {
+    const hasData = d.cache_age_seconds !== null;
+    const hasModels = d.models && d.models.some(m => m.exists);
+    if (hasData) {
       const hrs = (d.cache_age_seconds / 3600).toFixed(1);
       const fresh = d.cache_age_seconds < d.cache_max_age_seconds;
       badge.textContent = `Data: ${hrs}h ago`;
       badge.className = 'cache-badge ' + (fresh ? 'fresh' : 'stale');
     } else {
-      badge.textContent = 'No cached data';
+      badge.textContent = 'No data yet';
+    }
+
+    // Update My Team guidance based on state, auto-import once ready
+    if (afterTask) {
+      const display = document.getElementById('myTeamDisplay');
+      const isShowingGuidance = display.querySelector('.empty-state');
+      if (hasData && hasModels) {
+        const savedId = localStorage.getItem('fpl_manager_id');
+        if (savedId) importMyTeam();
+      } else if (hasData && !hasModels && isShowingGuidance) {
+        display.innerHTML =
+          '<div class="empty-state"><h3>Data Loaded</h3><p>Next, click <b>Train Models</b> above to generate predictions.</p></div>';
+      }
     }
 
   });
@@ -2235,8 +2340,14 @@ function importMyTeam() {
 
   fetch(`/api/my-team?manager_id=${managerId}`).then(r => r.json()).then(d => {
     if (d.error) {
-      document.getElementById('myTeamDisplay').innerHTML =
-        `<div class="empty-state"><h3>Error</h3><p>${d.error}</p></div>`;
+      // Friendly message when no data has been fetched yet
+      if (d.error.includes('bootstrap') || d.error.includes('Get Latest Data')) {
+        document.getElementById('myTeamDisplay').innerHTML =
+          '<div class="empty-state"><h3>Welcome to FPL Gaffer</h3><p>Get started by clicking <b>Get Latest Data</b> above. Once fetched, click <b>Train Models</b>. After that, <b>Import Squad</b>.</p></div>';
+      } else {
+        document.getElementById('myTeamDisplay').innerHTML =
+          `<div class="empty-state"><h3>Error</h3><p>${d.error}</p></div>`;
+      }
       return;
     }
     renderMyTeam(d);
@@ -3873,6 +3984,7 @@ function loadPrices() {
       renderPriceTable(d.prices || []);
     });
   loadPricePredictions();
+  loadWatchlist();
   loadPriceHistory();
 }
 
@@ -4052,6 +4164,117 @@ function loadPriceHistory() {
       }
     });
 }
+
+// --- Watchlist ---
+
+let _watchlistSearchTimer = null;
+function debounceWatchlistSearch() {
+  clearTimeout(_watchlistSearchTimer);
+  _watchlistSearchTimer = setTimeout(searchWatchlistPlayer, 250);
+}
+
+function searchWatchlistPlayer() {
+  const input = document.getElementById('watchlistSearch');
+  const dropdown = document.getElementById('watchlistDropdown');
+  const query = (input.value || '').trim();
+  if (query.length < 2) { dropdown.style.display = 'none'; return; }
+  fetch(`/api/predictions?search=${encodeURIComponent(query)}`)
+    .then(r => r.json())
+    .then(d => {
+      const players = (d.players || []).slice(0, 10);
+      if (!players.length) {
+        dropdown.innerHTML = '<div style="padding:8px 12px;font-size:12px;color:var(--text2)">No players found</div>';
+        dropdown.style.display = 'block';
+        return;
+      }
+      let html = '';
+      players.forEach(p => {
+        const price = p.cost ? p.cost.toFixed(1) + 'm' : '';
+        html += `<div style="padding:6px 12px;cursor:pointer;font-size:13px;display:flex;justify-content:space-between;border-bottom:1px solid var(--border)" onmouseover="this.style.background='var(--surface3)'" onmouseout="this.style.background=''" onclick="addToWatchlist(${p.player_id})">
+          <span>${p.web_name} <span style="color:var(--text2)">${p.position || ''}</span></span>
+          <span style="color:var(--text2)">${price}</span>
+        </div>`;
+      });
+      dropdown.innerHTML = html;
+      dropdown.style.display = 'block';
+    });
+}
+
+function addToWatchlist(playerId) {
+  const mid = getSeasonManagerId();
+  if (!mid) return;
+  document.getElementById('watchlistDropdown').style.display = 'none';
+  document.getElementById('watchlistSearch').value = '';
+  fetch('/api/season/watchlist/add', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({manager_id: parseInt(mid), player_id: playerId}),
+  }).then(() => loadWatchlist());
+}
+
+function removeFromWatchlist(playerId) {
+  const mid = getSeasonManagerId();
+  if (!mid) return;
+  fetch('/api/season/watchlist/remove', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({manager_id: parseInt(mid), player_id: playerId}),
+  }).then(() => loadWatchlist());
+}
+
+function loadWatchlist() {
+  const mid = getSeasonManagerId();
+  if (!mid) return;
+  fetch(`/api/season/watchlist?manager_id=${mid}`)
+    .then(r => r.json())
+    .then(d => renderWatchlist(d.watchlist || []));
+}
+
+function renderWatchlist(watchlist) {
+  const el = document.getElementById('watchlistContainer');
+  if (!el) return;
+  if (!watchlist.length) {
+    el.innerHTML = '<p style="color:var(--text2);font-size:13px">No players on watchlist. Search above to add players you\'re interested in.</p>';
+    return;
+  }
+  let html = '<div class="bt-table-wrap"><table class="bt-table"><thead><tr>';
+  html += '<th>Player</th><th>Team</th><th>Added Price</th><th>Current Price</th><th>Change</th><th></th>';
+  html += '</tr></thead><tbody>';
+  watchlist.forEach(w => {
+    const addedPrice = w.price_when_added;
+    const currentPrice = w.current_price;
+    let changeHtml = '-';
+    if (addedPrice != null && currentPrice != null) {
+      const diff = currentPrice - addedPrice;
+      if (Math.abs(diff) >= 0.05) {
+        const color = diff > 0 ? 'var(--green)' : 'var(--red)';
+        const sign = diff > 0 ? '+' : '';
+        changeHtml = `<span style="color:${color}">${sign}${diff.toFixed(1)}</span>`;
+      } else {
+        changeHtml = '<span style="color:var(--text2)">0.0</span>';
+      }
+    }
+    html += `<tr>
+      <td>${w.web_name || '-'}</td>
+      <td>${w.team_short || '-'}</td>
+      <td>${addedPrice != null ? addedPrice.toFixed(1) + 'm' : '-'}</td>
+      <td>${currentPrice != null ? currentPrice.toFixed(1) + 'm' : '-'}</td>
+      <td>${changeHtml}</td>
+      <td><button class="btn" style="font-size:11px;padding:2px 8px;color:var(--red)" onclick="removeFromWatchlist(${w.player_id})">Remove</button></td>
+    </tr>`;
+  });
+  html += '</tbody></table></div>';
+  el.innerHTML = html;
+}
+
+// Close watchlist dropdown on outside click
+document.addEventListener('click', function(e) {
+  const dropdown = document.getElementById('watchlistDropdown');
+  const search = document.getElementById('watchlistSearch');
+  if (dropdown && search && !dropdown.contains(e.target) && e.target !== search) {
+    dropdown.style.display = 'none';
+  }
+});
 
 // Hook into SSE task_done to reload season data
 const _origSSEHandler = null;

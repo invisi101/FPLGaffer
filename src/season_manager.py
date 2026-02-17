@@ -1756,10 +1756,9 @@ class SeasonManager:
         else:
             squad_ids = set()
 
-        # Top transferred-in players (watchlist)
-        sorted_elements = sorted(elements, key=lambda e: e.get("transfers_in_event", 0), reverse=True)
-        watchlist_ids = {e["id"] for e in sorted_elements[:30]}
-
+        # Include watchlist players alongside squad
+        watchlist = self.db.get_watchlist(season_id)
+        watchlist_ids = {w["player_id"] for w in watchlist}
         track_ids = squad_ids | watchlist_ids
         players = []
         for el in elements:

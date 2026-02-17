@@ -153,6 +153,17 @@ class SeasonDB:
                     reason TEXT,
                     created_at TEXT NOT NULL DEFAULT (datetime('now'))
                 );
+
+                CREATE TABLE IF NOT EXISTS watchlist (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    season_id INTEGER NOT NULL REFERENCES season(id) ON DELETE CASCADE,
+                    player_id INTEGER NOT NULL,
+                    web_name TEXT,
+                    team_code INTEGER,
+                    price_when_added REAL,
+                    added_date TEXT NOT NULL DEFAULT (date('now')),
+                    UNIQUE(season_id, player_id)
+                );
             """)
             # Migrate: add team_code to fixture_calendar if missing
             try:
@@ -643,5 +654,41 @@ class SeasonDB:
                 """SELECT * FROM plan_changelog WHERE season_id=?
                    ORDER BY created_at DESC LIMIT ?""",
                 (season_id, limit),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    # -----------------------------------------------------------------------
+    # Watchlist
+    # -----------------------------------------------------------------------
+
+    def add_to_watchlist(self, season_id: int, player_id: int,
+                         web_name: str = "", team_code: int | None = None,
+                         price_when_added: float | None = None):
+        with self._conn_ctx() as conn:
+            conn.execute(
+                """INSERT INTO watchlist
+                   (season_id, player_id, web_name, team_code, price_when_added)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(season_id, player_id) DO UPDATE SET
+                     web_name=excluded.web_name,
+                     team_code=excluded.team_code""",
+                (season_id, player_id, web_name, team_code, price_when_added),
+            )
+            conn.commit()
+
+    def remove_from_watchlist(self, season_id: int, player_id: int):
+        with self._conn_ctx() as conn:
+            conn.execute(
+                "DELETE FROM watchlist WHERE season_id=? AND player_id=?",
+                (season_id, player_id),
+            )
+            conn.commit()
+
+    def get_watchlist(self, season_id: int) -> list[dict]:
+        with self._conn_ctx() as conn:
+            rows = conn.execute(
+                """SELECT * FROM watchlist WHERE season_id=?
+                   ORDER BY added_date DESC, web_name""",
+                (season_id,),
             ).fetchall()
         return [dict(r) for r in rows]

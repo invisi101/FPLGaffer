@@ -356,8 +356,6 @@ def api_refresh_data():
                     mid = s["manager_id"]
                     health = _season_mgr.check_plan_health(mid)
                     if not health["healthy"]:
-                        desc = "; ".join(t["description"] for t in health["triggers"][:3])
-                        print(f"  Plan health issue for manager {mid}: {desc}")
                         _broadcast(
                             f"Plan health issue for manager {mid}: {health['summary']}",
                             event="plan_invalidated",
@@ -2038,6 +2036,108 @@ def api_season_price_history():
 
     history = _season_mgr.get_price_history(season["id"], player_ids=player_ids, days=days)
     return jsonify({"history": history})
+
+
+@app.route("/api/season/watchlist")
+def api_season_watchlist():
+    """Return watchlist entries with latest prices."""
+    manager_id = request.args.get("manager_id")
+    if not manager_id:
+        return jsonify({"error": "manager_id is required."}), 400
+    try:
+        manager_id = int(manager_id)
+    except (TypeError, ValueError):
+        return jsonify({"error": "manager_id must be an integer."}), 400
+
+    season = _season_db.get_season(manager_id)
+    if not season:
+        return jsonify({"error": "No active season."}), 404
+
+    watchlist = _season_db.get_watchlist(season["id"])
+
+    # Enrich with current prices from bootstrap
+    try:
+        bootstrap_path = CACHE_DIR / "fpl_api_bootstrap.json"
+        if bootstrap_path.exists():
+            bootstrap = json.loads(bootstrap_path.read_text(encoding="utf-8"))
+            elements = {e["id"]: e for e in bootstrap.get("elements", [])}
+            id_to_code = {t["id"]: t["code"] for t in bootstrap.get("teams", [])}
+            code_to_short = {t["code"]: t["short_name"] for t in bootstrap.get("teams", [])}
+            for w in watchlist:
+                el = elements.get(w["player_id"])
+                if el:
+                    w["current_price"] = el.get("now_cost", 0) / 10
+                    tc = id_to_code.get(el.get("team"))
+                    w["team_short"] = code_to_short.get(tc, "")
+    except Exception:
+        pass
+
+    return jsonify({"watchlist": watchlist})
+
+
+@app.route("/api/season/watchlist/add", methods=["POST"])
+def api_season_watchlist_add():
+    """Add a player to the watchlist."""
+    body = request.get_json(silent=True) or {}
+    manager_id = body.get("manager_id")
+    player_id = body.get("player_id")
+    if not manager_id or not player_id:
+        return jsonify({"error": "manager_id and player_id are required."}), 400
+    try:
+        manager_id = int(manager_id)
+        player_id = int(player_id)
+    except (TypeError, ValueError):
+        return jsonify({"error": "manager_id and player_id must be integers."}), 400
+
+    season = _season_db.get_season(manager_id)
+    if not season:
+        return jsonify({"error": "No active season."}), 404
+
+    # Look up player info from bootstrap
+    web_name = ""
+    team_code = None
+    price = None
+    try:
+        bootstrap_path = CACHE_DIR / "fpl_api_bootstrap.json"
+        if bootstrap_path.exists():
+            bootstrap = json.loads(bootstrap_path.read_text(encoding="utf-8"))
+            id_to_code = {t["id"]: t["code"] for t in bootstrap.get("teams", [])}
+            for el in bootstrap.get("elements", []):
+                if el["id"] == player_id:
+                    web_name = el.get("web_name", "")
+                    team_code = id_to_code.get(el.get("team"))
+                    price = el.get("now_cost", 0) / 10
+                    break
+    except Exception:
+        pass
+
+    _season_db.add_to_watchlist(
+        season["id"], player_id,
+        web_name=web_name, team_code=team_code, price_when_added=price,
+    )
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/season/watchlist/remove", methods=["POST"])
+def api_season_watchlist_remove():
+    """Remove a player from the watchlist."""
+    body = request.get_json(silent=True) or {}
+    manager_id = body.get("manager_id")
+    player_id = body.get("player_id")
+    if not manager_id or not player_id:
+        return jsonify({"error": "manager_id and player_id are required."}), 400
+    try:
+        manager_id = int(manager_id)
+        player_id = int(player_id)
+    except (TypeError, ValueError):
+        return jsonify({"error": "manager_id and player_id must be integers."}), 400
+
+    season = _season_db.get_season(manager_id)
+    if not season:
+        return jsonify({"error": "No active season."}), 404
+
+    _season_db.remove_from_watchlist(season["id"], player_id)
+    return jsonify({"status": "ok"})
 
 
 @app.route("/api/season/plan-changelog")
