@@ -562,7 +562,9 @@ def _build_playerstats_features(playerstats: pd.DataFrame) -> pd.DataFrame:
     for cum_col in ["influence", "creativity", "threat", "ict_index", "player_bps"]:
         if cum_col in result.columns:
             result = result.sort_values(["player_id", "gameweek"])
-            result[f"gw_{cum_col}"] = result.groupby("player_id")[cum_col].diff()
+            # Forward-fill within each player to avoid accumulated deltas across GW gaps
+            filled = result.groupby("player_id")[cum_col].ffill()
+            result[f"gw_{cum_col}"] = filled.groupby(result["player_id"]).diff()
             first_mask = result[f"gw_{cum_col}"].isna()
             result.loc[first_mask, f"gw_{cum_col}"] = result.loc[first_mask, cum_col]
             result[f"gw_{cum_col}"] = result[f"gw_{cum_col}"].clip(lower=0)
@@ -732,7 +734,9 @@ def _build_decomposed_targets(
         ps_bonus = ps_bonus.rename(columns={"id": "player_id", "gw": "gameweek"})
         ps_bonus["bonus"] = pd.to_numeric(ps_bonus["bonus"], errors="coerce").fillna(0)
         ps_bonus = ps_bonus.sort_values(["player_id", "gameweek"])
-        ps_bonus["gw_bonus"] = ps_bonus.groupby("player_id")["bonus"].diff()
+        # Forward-fill within each player to avoid accumulated deltas across GW gaps
+        filled_bonus = ps_bonus.groupby("player_id")["bonus"].ffill()
+        ps_bonus["gw_bonus"] = filled_bonus.groupby(ps_bonus["player_id"]).diff()
         # First GW diff is NaN — use the raw value (it IS the per-GW value for GW1)
         first_mask = ps_bonus["gw_bonus"].isna()
         ps_bonus.loc[first_mask, "gw_bonus"] = ps_bonus.loc[first_mask, "bonus"]
@@ -1489,5 +1493,5 @@ def get_feature_columns(df: pd.DataFrame) -> list[str]:
     exclude.update({"influence", "creativity", "threat", "ict_index",
                      "player_bps", "player_bonus"})
 
-    feature_cols = [c for c in df.columns if c not in exclude and df[c].dtype in [np.float64, np.int64, float, int]]
+    feature_cols = [c for c in df.columns if c not in exclude and pd.api.types.is_numeric_dtype(df[c])]
     return sorted(feature_cols)
