@@ -395,16 +395,23 @@ class SeasonManager:
         for _, row in pred_df.iterrows():
             pred_map[row.get("player_id")] = row.to_dict()
 
-        # Current XI points (include captain bonus to match FPL actual_points scale)
-        current_starters = [p for p in current_squad if p["starter"]]
+        # Current XI points: optimize the current 15-man squad, then sum
+        # starters + captain bonus. This matches what the UI pitch cards show.
+        opt_current = [dict(p) for p in current_squad]
+        for p in opt_current:
+            pred = pred_map.get(p["player_id"], {})
+            p["predicted_next_gw_points"] = pred.get(target_col, 0) or 0
+            p["captain_score"] = pred.get("captain_score", 0) or 0
+        self._optimize_starting_xi(opt_current)
+        opt_starters = [p for p in opt_current if p.get("starter")]
+        opt_captain = next((p for p in opt_starters if p.get("is_captain")), None)
         current_xi_points = round(
-            sum(pred_map.get(p["player_id"], {}).get(target_col, 0) or 0 for p in current_starters), 2
+            sum(p.get("predicted_next_gw_points", 0) or 0 for p in opt_starters), 2
         )
-        # Add captain bonus (captain doubles their points)
-        current_captain = next((p for p in current_squad if p.get("is_captain")), None)
-        if current_captain:
-            cap_pred = pred_map.get(current_captain["player_id"], {}).get(target_col, 0) or 0
-            current_xi_points = round(current_xi_points + cap_pred, 2)
+        if opt_captain:
+            current_xi_points = round(
+                current_xi_points + (opt_captain.get("predicted_next_gw_points", 0) or 0), 2
+            )
 
         # =====================================================================
         # STRATEGIC PLANNING: Multi-GW predictions + chip heatmap + transfer plan
@@ -819,12 +826,31 @@ class SeasonManager:
             code_to_short,
         )
 
-        # Extract base_points from GW1 path entry (post-transfer, pre-chip points)
-        base_points = predicted_points
-        if multi_week_plan:
-            gw1_base = multi_week_plan[0].get("base_points")
-            if gw1_base is not None:
-                base_points = gw1_base
+        # Compute base_points and predicted_points from the actual new_squad
+        # so the three-box display matches the pitch card values exactly.
+        base_points = current_xi_points
+        predicted_points = current_xi_points
+        if new_squad_json:
+            ns = json.loads(new_squad_json)
+            ns_starters = [p for p in ns if p.get("starter")]
+            ns_captain = next((p for p in ns_starters if p.get("is_captain")), None)
+            ns_bench = [p for p in ns if not p.get("starter")]
+            # base_points = starters + captain bonus (same as pitch card sum)
+            bp = sum(p.get("predicted_next_gw_points", 0) or 0 for p in ns_starters)
+            if ns_captain:
+                bp += ns_captain.get("predicted_next_gw_points", 0) or 0
+            base_points = round(bp, 2)
+            # predicted_points = base + chip effect
+            predicted_points = base_points
+            if chip_suggestion == "bboost":
+                predicted_points = round(bp + sum(
+                    p.get("predicted_next_gw_points", 0) or 0 for p in ns_bench
+                ), 2)
+            elif chip_suggestion == "3xc" and ns_captain:
+                # TC = 3x captain, base already has 2x, add one more
+                predicted_points = round(
+                    bp + (ns_captain.get("predicted_next_gw_points", 0) or 0), 2
+                )
 
         # Save to DB
         self.db.save_recommendation(
@@ -1298,6 +1324,8 @@ class SeasonManager:
             "steps": steps,
             "rationale": rationale,
             "predicted_points": rec.get("predicted_points"),
+            "current_xi_points": rec.get("current_xi_points"),
+            "base_points": rec.get("base_points"),
         }
 
     # -------------------------------------------------------------------
