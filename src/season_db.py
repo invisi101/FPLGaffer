@@ -85,6 +85,7 @@ class SeasonDB:
                     bank_analysis_json TEXT,
                     new_squad_json TEXT,
                     predicted_points REAL,
+                    base_points REAL,
                     current_xi_points REAL,
                     free_transfers INTEGER,
                     created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -177,6 +178,11 @@ class SeasonDB:
                 conn.execute("SELECT free_transfers FROM recommendation LIMIT 1")
             except sqlite3.OperationalError:
                 conn.execute("ALTER TABLE recommendation ADD COLUMN free_transfers INTEGER")
+            # Migrate: add base_points to recommendation if missing
+            try:
+                conn.execute("SELECT base_points FROM recommendation LIMIT 1")
+            except sqlite3.OperationalError:
+                conn.execute("ALTER TABLE recommendation ADD COLUMN base_points REAL")
             # Migrate: add current_xi_points to recommendation if missing
             try:
                 conn.execute("SELECT current_xi_points FROM recommendation LIMIT 1")
@@ -330,8 +336,9 @@ class SeasonDB:
                 """INSERT INTO recommendation
                    (season_id, gameweek, transfers_json, captain_id, captain_name,
                     chip_suggestion, chip_values_json, bank_analysis_json,
-                    new_squad_json, predicted_points, current_xi_points, free_transfers)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    new_squad_json, predicted_points, base_points,
+                    current_xi_points, free_transfers)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(season_id, gameweek) DO UPDATE SET
                      transfers_json=excluded.transfers_json,
                      captain_id=excluded.captain_id,
@@ -341,6 +348,7 @@ class SeasonDB:
                      bank_analysis_json=excluded.bank_analysis_json,
                      new_squad_json=excluded.new_squad_json,
                      predicted_points=excluded.predicted_points,
+                     base_points=excluded.base_points,
                      current_xi_points=excluded.current_xi_points,
                      free_transfers=excluded.free_transfers,
                      created_at=datetime('now')""",
@@ -354,6 +362,7 @@ class SeasonDB:
                     kwargs.get("bank_analysis_json"),
                     kwargs.get("new_squad_json"),
                     kwargs.get("predicted_points"),
+                    kwargs.get("base_points"),
                     kwargs.get("current_xi_points"),
                     kwargs.get("free_transfers"),
                 ),

@@ -619,6 +619,38 @@ class SeasonManager:
             for i, out_p in enumerate(out_list):
                 in_p = in_list[i] if i < len(in_list) else {}
                 transfers.append({"out": out_p, "in": in_p})
+
+            # Build post-transfer squad and optimize starting XI
+            out_ids = {t.get("player_id") for t in gw1.get("transfers_out", [])}
+            new_squad = []
+            for p in current_squad:
+                if p["player_id"] in out_ids:
+                    continue
+                pp = dict(p)
+                pred = pred_map.get(p["player_id"], {})
+                pp["predicted_next_gw_points"] = pred.get("predicted_next_gw_points")
+                pp["predicted_next_3gw_points"] = pred.get("predicted_next_3gw_points")
+                pp["captain_score"] = pred.get("captain_score")
+                new_squad.append(pp)
+            for t in gw1.get("transfers_in", []):
+                pid = t.get("player_id")
+                el = elements_map.get(pid, {})
+                pred = pred_map.get(pid, {})
+                team_code = id_to_code.get(el.get("team"))
+                new_squad.append({
+                    "player_id": pid,
+                    "web_name": t.get("web_name") or el.get("web_name", "Unknown"),
+                    "position": t.get("position") or ELEMENT_TYPE_MAP.get(el.get("element_type"), ""),
+                    "team_code": team_code,
+                    "team": code_to_short.get(team_code, ""),
+                    "cost": (t.get("cost") or (el.get("now_cost", 0) / 10)),
+                    "predicted_next_gw_points": pred.get("predicted_next_gw_points"),
+                    "predicted_next_3gw_points": pred.get("predicted_next_3gw_points"),
+                    "captain_score": pred.get("captain_score"),
+                })
+            if len(new_squad) == 15:
+                self._optimize_starting_xi(new_squad)
+                new_squad_json = json.dumps(scrub_nan(new_squad))
         else:
             # Fall back to single-GW MILP solver
             log("  Running single-GW transfer solver (fallback)...")
@@ -673,12 +705,21 @@ class SeasonManager:
                     transfers.append({"out": out_p, "in": in_p})
 
         # --- Captain pick ---
+        # Use captain from optimized post-transfer squad if available (most accurate,
+        # since it considers the actual squad after transfers). Fall back to strategic
+        # plan captain, then to highest captain_score in the post-transfer squad.
         log("  Picking captain...")
         captain_id = None
         captain_name = None
 
-        # Use strategic captain plan if available
-        if strategic_plan and strategic_plan.get("timeline"):
+        if new_squad_json:
+            opt_squad = json.loads(new_squad_json)
+            opt_cap = next((p for p in opt_squad if p.get("is_captain")), None)
+            if opt_cap:
+                captain_id = opt_cap.get("player_id")
+                captain_name = opt_cap.get("web_name")
+
+        if captain_id is None and strategic_plan and strategic_plan.get("timeline"):
             first_entry = strategic_plan["timeline"][0]
             captain_id = first_entry.get("captain_id")
             captain_name = first_entry.get("captain_name")
@@ -758,22 +799,12 @@ class SeasonManager:
             code_to_short,
         )
 
-        # Adjust current_xi_points to include chip effects for fair comparison
-        # predicted_points from the planner already includes BB/TC effects,
-        # so current_xi_points must reflect the same chip on the unchanged team.
-        if chip_suggestion == "bboost":
-            bench_players = [p for p in current_squad if not p["starter"]]
-            bench_pts = sum(
-                pred_map.get(p["player_id"], {}).get(target_col, 0) or 0
-                for p in bench_players
-            )
-            current_xi_points = round(current_xi_points + bench_pts, 2)
-        elif chip_suggestion == "3xc":
-            # TC gives 3x instead of 2x; current_xi_points already has 2x captain,
-            # so add one more captain bonus to match
-            if current_captain:
-                cap_pred = pred_map.get(current_captain["player_id"], {}).get(target_col, 0) or 0
-                current_xi_points = round(current_xi_points + cap_pred, 2)
+        # Extract base_points from GW1 path entry (post-transfer, pre-chip points)
+        base_points = predicted_points
+        if multi_week_plan:
+            gw1_base = multi_week_plan[0].get("base_points")
+            if gw1_base is not None:
+                base_points = gw1_base
 
         # Save to DB
         self.db.save_recommendation(
@@ -787,6 +818,7 @@ class SeasonManager:
             bank_analysis_json=json.dumps(bank_analysis),
             new_squad_json=new_squad_json,
             predicted_points=predicted_points,
+            base_points=base_points,
             current_xi_points=current_xi_points,
             free_transfers=free_transfers,
         )
@@ -1496,6 +1528,7 @@ class SeasonManager:
             bank_analysis_json=json.dumps({}),
             new_squad_json=json.dumps(scrub_nan(result["players"])),
             predicted_points=result["starting_points"],
+            base_points=result["starting_points"],
             current_xi_points=result["starting_points"],
             free_transfers=1,
         )
@@ -1523,6 +1556,57 @@ class SeasonManager:
             "chip_schedule": chip_schedule,
             "chip_heatmap": scrub_nan_recursive(chip_heatmap),
         }
+
+    # -------------------------------------------------------------------
+    # Squad optimization
+    # -------------------------------------------------------------------
+
+    @staticmethod
+    def _optimize_starting_xi(squad, pred_key="predicted_next_gw_points",
+                              captain_key="captain_score"):
+        """Pick best formation-valid XI + captain from a 15-player squad list.
+
+        Mutates the dicts in *squad* (sets starter/is_captain/is_vice_captain).
+        """
+        by_pos = {}
+        for p in squad:
+            by_pos.setdefault(p.get("position", ""), []).append(p)
+        for pos in by_pos:
+            by_pos[pos].sort(key=lambda p: (p.get(pred_key) or 0), reverse=True)
+
+        best_pts = -1
+        best_xi_ids = set()
+
+        gkps = by_pos.get("GKP", [])
+        defs = by_pos.get("DEF", [])
+        mids = by_pos.get("MID", [])
+        fwds = by_pos.get("FWD", [])
+
+        for d in range(3, min(6, len(defs) + 1)):
+            for m in range(2, min(6, len(mids) + 1)):
+                f = 10 - d - m
+                if f < 1 or f > 3 or f > len(fwds):
+                    continue
+                xi = gkps[:1] + defs[:d] + mids[:m] + fwds[:f]
+                pts = sum((p.get(pred_key) or 0) for p in xi)
+                if pts > best_pts:
+                    best_pts = pts
+                    best_xi_ids = {p["player_id"] for p in xi}
+
+        for p in squad:
+            p["starter"] = p["player_id"] in best_xi_ids
+            p["is_captain"] = False
+            p["is_vice_captain"] = False
+
+        starters = [p for p in squad if p["starter"]]
+        if starters:
+            cap_key = captain_key if any(p.get(captain_key) for p in starters) else pred_key
+            starters.sort(key=lambda p: (p.get(cap_key) or 0), reverse=True)
+            starters[0]["is_captain"] = True
+            if len(starters) > 1:
+                starters[1]["is_vice_captain"] = True
+
+        return squad
 
     # -------------------------------------------------------------------
     # Chip Evaluation

@@ -848,6 +848,62 @@ def _calculate_free_transfers(history: dict) -> int:
 ELEMENT_TYPE_MAP = {1: "GKP", 2: "DEF", 3: "MID", 4: "FWD"}
 
 
+def _optimize_starting_xi(squad, pred_key="predicted_next_gw_points",
+                          captain_key="captain_score"):
+    """Pick the best formation-valid XI + captain from a 15-player squad.
+
+    Returns a new list (copies) with updated starter/is_captain/is_vice_captain
+    flags.  Original list is not mutated.
+    """
+    import copy
+    players = [copy.copy(p) for p in squad]
+
+    by_pos = {}
+    for p in players:
+        by_pos.setdefault(p.get("position", ""), []).append(p)
+    # Sort each position group by predicted points descending
+    for pos in by_pos:
+        by_pos[pos].sort(key=lambda p: (p.get(pred_key) or 0), reverse=True)
+
+    best_pts = -1
+    best_xi_ids = set()
+
+    # Try all valid formations: 1 GKP + d DEF + m MID + f FWD = 11
+    gkps = by_pos.get("GKP", [])
+    defs = by_pos.get("DEF", [])
+    mids = by_pos.get("MID", [])
+    fwds = by_pos.get("FWD", [])
+
+    for d in range(3, min(6, len(defs) + 1)):
+        for m in range(2, min(6, len(mids) + 1)):
+            f = 10 - d - m
+            if f < 1 or f > 3 or f > len(fwds):
+                continue
+            # Pick top players per position
+            xi = gkps[:1] + defs[:d] + mids[:m] + fwds[:f]
+            pts = sum((p.get(pred_key) or 0) for p in xi)
+            if pts > best_pts:
+                best_pts = pts
+                best_xi_ids = {p["player_id"] for p in xi}
+
+    # Apply starter flags
+    for p in players:
+        p["starter"] = p["player_id"] in best_xi_ids
+        p["is_captain"] = False
+        p["is_vice_captain"] = False
+
+    # Captain: highest captain_score among starters
+    starters = [p for p in players if p["starter"]]
+    if starters:
+        cap_key = captain_key if any(p.get(captain_key) for p in starters) else pred_key
+        starters.sort(key=lambda p: (p.get(cap_key) or 0), reverse=True)
+        starters[0]["is_captain"] = True
+        if len(starters) > 1:
+            starters[1]["is_vice_captain"] = True
+
+    return players
+
+
 @app.route("/api/my-team")
 def api_my_team():
     """Fetch a manager's current squad from the FPL API, enriched with predictions."""
@@ -982,17 +1038,19 @@ def api_my_team():
 
         squad.append(player)
 
-    # Compute starting XI points
-    # Predictions need captain bonus added (raw values, no multiplier)
-    # Actuals already include captain multiplier via event_points = raw * multiplier
-    starters = [p for p in squad if p["starter"]]
-    captain = next((p for p in starters if p.get("is_captain")), None)
-    xi_pred_gw = sum(p.get("predicted_next_gw_points") or 0 for p in starters)
-    xi_pred_3gw = sum(p.get("predicted_next_3gw_points") or 0 for p in starters)
-    xi_actual_gw = sum(p.get("event_points") or 0 for p in starters)
-    if captain:
-        xi_pred_gw += captain.get("predicted_next_gw_points") or 0
-        xi_pred_3gw += captain.get("predicted_next_3gw_points") or 0
+    # Actual XI points (from FPL picks — event_points already includes captain multiplier)
+    actual_starters = [p for p in squad if p["starter"]]
+    xi_actual_gw = sum(p.get("event_points") or 0 for p in actual_starters)
+
+    # Optimized starting XI for predictions (best formation-valid XI from 15 players)
+    optimized_squad = _optimize_starting_xi(squad)
+    opt_starters = [p for p in optimized_squad if p["starter"]]
+    opt_captain = next((p for p in opt_starters if p.get("is_captain")), None)
+    xi_pred_gw = sum(p.get("predicted_next_gw_points") or 0 for p in opt_starters)
+    xi_pred_3gw = sum(p.get("predicted_next_3gw_points") or 0 for p in opt_starters)
+    if opt_captain:
+        xi_pred_gw += opt_captain.get("predicted_next_gw_points") or 0
+        xi_pred_3gw += opt_captain.get("predicted_next_3gw_points") or 0
 
     # Squad value: now_cost sum (matches FPL app) vs selling value (from API)
     squad_value_now_cost = round(sum(p["cost"] for p in squad), 1)
@@ -1014,6 +1072,7 @@ def api_my_team():
         "active_chip": active_chip,
         "chips_used": chips_used,
         "squad": _scrub_nan(squad),
+        "optimized_squad": _scrub_nan(optimized_squad),
         "xi_actual_gw": round(xi_actual_gw, 1),
         "xi_pred_gw": round(xi_pred_gw, 2),
         "xi_pred_3gw": round(xi_pred_3gw, 2),

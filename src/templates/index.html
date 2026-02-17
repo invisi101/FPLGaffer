@@ -2188,10 +2188,17 @@ function pickBestTeam() {
 
     // Build pitch card HTML
     function card(p) {
-      const pts = p[target] != null ? Number(p[target]).toFixed(1) : '-';
+      let pts;
+      const isCaptain = p.player_id === captainId;
+      if (p[target] != null) {
+        let rawPred = Number(p[target]);
+        if (isCaptain) rawPred *= 2;
+        pts = rawPred.toFixed(1);
+      } else {
+        pts = '-';
+      }
       const fdrVal = Math.round(p.fdr || 3);
       const opp = p.opponent || '';
-      const isCaptain = p.player_id === captainId;
       const captainStyle = isCaptain ? 'border:2px solid #ef4444;box-shadow:0 0 8px rgba(239,68,68,0.4)' : '';
       const captainBadge = isCaptain ? '<span style="color:#ef4444;font-weight:700;font-size:10px"> (C)</span>' : '';
       return `<div class="pitch-card" style="${captainStyle}">
@@ -2405,12 +2412,25 @@ function renderMyTeam(d) {
   const starters = d.squad.filter(p => p.starter);
   const bench = d.squad.filter(p => !p.starter);
 
-  function myTeamCard(p, mode) {
+  // Optimized squad for predicted pitch (best formation-valid XI from 15 players)
+  const optSquad = d.optimized_squad || d.squad;
+  const optStarters = optSquad.filter(p => p.starter);
+  const optBench = optSquad.filter(p => !p.starter);
+
+  function myTeamCard(p, mode, chipContext) {
     // mode: 'actual' = show event_points, 'predicted' = show predicted
+    // chipContext: optional chip name (e.g. '3xc') to adjust captain multiplier
     const isActual = mode === 'actual';
-    const pts = isActual
-      ? (p.event_points != null ? Number(p.event_points).toFixed(0) : '-')
-      : (p.predicted_next_gw_points != null ? Number(p.predicted_next_gw_points).toFixed(1) : '-');
+    let pts;
+    if (isActual) {
+      pts = p.event_points != null ? Number(p.event_points).toFixed(0) : '-';
+    } else if (p.predicted_next_gw_points != null) {
+      let rawPred = Number(p.predicted_next_gw_points);
+      if (p.is_captain) rawPred *= (chipContext === '3xc' ? 3 : 2);
+      pts = rawPred.toFixed(1);
+    } else {
+      pts = '-';
+    }
     const ptsColor = isActual ? 'var(--orange)' : 'var(--green)';
     const fdrVal = Math.round(p.fdr || 3);
     const opp = p.opponent || '';
@@ -2449,17 +2469,17 @@ function renderMyTeam(d) {
     </div>`;
   }
 
-  function buildMyTeamPitch(players, mode) {
+  function buildMyTeamPitch(players, mode, chipContext) {
     const fwd = players.filter(p => p.position === 'FWD');
     const mid = players.filter(p => p.position === 'MID');
     const def_ = players.filter(p => p.position === 'DEF');
     const gkp = players.filter(p => p.position === 'GKP');
     return `<div class="pitch">
       <div class="pitch-bottom-box"></div>
-      <div class="pitch-row fwd">${fwd.map(p => myTeamCard(p, mode)).join('')}</div>
-      <div class="pitch-row mid">${mid.map(p => myTeamCard(p, mode)).join('')}</div>
-      <div class="pitch-row def">${def_.map(p => myTeamCard(p, mode)).join('')}</div>
-      <div class="pitch-row gkp">${gkp.map(p => myTeamCard(p, mode)).join('')}</div>
+      <div class="pitch-row fwd">${fwd.map(p => myTeamCard(p, mode, chipContext)).join('')}</div>
+      <div class="pitch-row mid">${mid.map(p => myTeamCard(p, mode, chipContext)).join('')}</div>
+      <div class="pitch-row def">${def_.map(p => myTeamCard(p, mode, chipContext)).join('')}</div>
+      <div class="pitch-row gkp">${gkp.map(p => myTeamCard(p, mode, chipContext)).join('')}</div>
     </div>`;
   }
 
@@ -2470,17 +2490,17 @@ function renderMyTeam(d) {
       ${buildMyTeamPitch(starters, 'actual')}
     </div>
     <div class="compare-side">
-      <h3 style="color:var(--green)">Predicted ${gwLabel}</h3>
-      ${buildMyTeamPitch(starters, 'predicted')}
+      <h3 style="color:var(--green)">Optimal ${gwLabel} (${Number(d.xi_pred_gw).toFixed(1)} pts)</h3>
+      ${buildMyTeamPitch(optStarters, 'predicted')}
     </div>
   </div>`;
 
-  // Bench (show predicted points)
-  if (bench.length) {
+  // Bench (show optimized bench with predicted points)
+  if (optBench.length) {
     const benchArea = document.createElement('div');
     benchArea.className = 'bench-area';
     benchArea.innerHTML = `<div class="bench-label">Bench</div>
-      <div class="bench-row">${bench.map(p => {
+      <div class="bench-row">${optBench.map(p => {
         const actualPts = p.event_points != null ? Number(p.event_points).toFixed(0) : '-';
         const predPts = p.predicted_next_gw_points != null ? Number(p.predicted_next_gw_points).toFixed(1) : '-';
         let statusCls = '';
@@ -2857,12 +2877,14 @@ function renderSeasonTeamView(d) {
   const curGw = d.current_event || '?';
   const gwLabel = d.next_gw ? `GW${d.next_gw}` : 'Next GW';
 
-  // Use locked squad for predicted side if available
+  // Use locked squad for predicted side if available, otherwise optimized squad
   const useLocked = lockedGWSquad && lockedGWSquad.squad;
-  const predSquad = useLocked ? lockedGWSquad.squad : d.squad;
+  const optSquad = d.optimized_squad || d.squad;
+  const predSquad = useLocked ? lockedGWSquad.squad : optSquad;
   const predStarters = predSquad.filter(p => p.starter);
   const predBench = predSquad.filter(p => !p.starter);
-  const predLabel = useLocked ? `Locked-in GW${lockedGWSquad.gameweek}` : `Predicted ${gwLabel}`;
+  const predLabel = useLocked ? `Locked-in GW${lockedGWSquad.gameweek}` : `Optimal ${gwLabel}`;
+  const predChipCtx = useLocked ? lockedGWSquad.chipCtx : null;
 
   // Total points this GW (include bench if Bench Boost active)
   // Actuals (event_points) already include captain multiplier — no extra bonus needed
@@ -2873,13 +2895,21 @@ function renderSeasonTeamView(d) {
   const predScorers = (useLocked && lockedGWSquad.benchBoost) ? predSquad : predStarters;
   let xiPred = predScorers.reduce((s, p) => s + (p.predicted_next_gw_points || 0), 0);
   const predCap = predStarters.find(p => p.is_captain);
-  if (predCap) xiPred += (predCap.predicted_next_gw_points || 0);
+  // Captain bonus: +1x normal (2x total), +2x for TC (3x total)
+  if (predCap) xiPred += (predCap.predicted_next_gw_points || 0) * (predChipCtx === '3xc' ? 2 : 1);
 
-  function teamCard(p, mode) {
+  function teamCard(p, mode, chipCtx) {
     const isActual = mode === 'actual';
-    const pts = isActual
-      ? (p.event_points != null ? Number(p.event_points).toFixed(0) : '-')
-      : (p.predicted_next_gw_points != null ? Number(p.predicted_next_gw_points).toFixed(1) : '-');
+    let pts;
+    if (isActual) {
+      pts = p.event_points != null ? Number(p.event_points).toFixed(0) : '-';
+    } else if (p.predicted_next_gw_points != null) {
+      let rawPred = Number(p.predicted_next_gw_points);
+      if (p.is_captain) rawPred *= (chipCtx === '3xc' ? 3 : 2);
+      pts = rawPred.toFixed(1);
+    } else {
+      pts = '-';
+    }
     const ptsColor = isActual ? 'var(--orange)' : 'var(--green)';
 
     let badge = '';
@@ -2913,17 +2943,17 @@ function renderSeasonTeamView(d) {
     </div>`;
   }
 
-  function buildPitch(players, mode) {
+  function buildPitch(players, mode, chipCtx) {
     const fwd = players.filter(p => p.position === 'FWD');
     const mid = players.filter(p => p.position === 'MID');
     const def_ = players.filter(p => p.position === 'DEF');
     const gkp = players.filter(p => p.position === 'GKP');
     return `<div class="pitch">
       <div class="pitch-bottom-box"></div>
-      <div class="pitch-row fwd">${fwd.map(p => teamCard(p, mode)).join('')}</div>
-      <div class="pitch-row mid">${mid.map(p => teamCard(p, mode)).join('')}</div>
-      <div class="pitch-row def">${def_.map(p => teamCard(p, mode)).join('')}</div>
-      <div class="pitch-row gkp">${gkp.map(p => teamCard(p, mode)).join('')}</div>
+      <div class="pitch-row fwd">${fwd.map(p => teamCard(p, mode, chipCtx)).join('')}</div>
+      <div class="pitch-row mid">${mid.map(p => teamCard(p, mode, chipCtx)).join('')}</div>
+      <div class="pitch-row def">${def_.map(p => teamCard(p, mode, chipCtx)).join('')}</div>
+      <div class="pitch-row gkp">${gkp.map(p => teamCard(p, mode, chipCtx)).join('')}</div>
     </div>`;
   }
 
@@ -2963,7 +2993,7 @@ function renderSeasonTeamView(d) {
       </div>
       <div class="compare-side">
         <h3 style="color:var(--green)">${predLabel} (${xiPred.toFixed(1)} pts)</h3>
-        ${buildPitch(predStarters, 'predicted')}
+        ${buildPitch(predStarters, 'predicted', predChipCtx)}
         ${predBenchHtml}
       </div>
     </div>`;
@@ -3279,10 +3309,19 @@ function renderActionPlan(plan) {
 function renderChipSquadPitch(squad, chipLabel) {
   const starters = squad.filter(p => p.starter);
   const bench = squad.filter(p => !p.starter);
-  const totalPts = starters.reduce((s, p) => s + (p.predicted_next_gw_points || 0), 0);
+  let totalPts = starters.reduce((s, p) => s + (p.predicted_next_gw_points || 0), 0);
+  const capPlayer = starters.find(p => p.is_captain);
+  if (capPlayer) totalPts += (capPlayer.predicted_next_gw_points || 0);
 
   function card(p) {
-    const pts = p.predicted_next_gw_points != null ? Number(p.predicted_next_gw_points).toFixed(1) : '-';
+    let pts;
+    if (p.predicted_next_gw_points != null) {
+      let rawPred = Number(p.predicted_next_gw_points);
+      if (p.is_captain) rawPred *= 2;
+      pts = rawPred.toFixed(1);
+    } else {
+      pts = '-';
+    }
     let badge = '';
     let cardStyle = '';
     if (p.is_captain) {
@@ -3366,6 +3405,7 @@ function lockInGWTeam() {
   // Check if a WC/FH chip step with new_squad is checked
   let wcFhSquad = null;
   let benchBoost = false;
+  let tripleCaptain = false;
   checkedEls.forEach(el => {
     const stepDiv = el.closest('.action-step');
     const idx = parseInt(stepDiv.dataset.stepIndex, 10);
@@ -3375,6 +3415,7 @@ function lockInGWTeam() {
       wcFhSquad = step.new_squad;
     }
     if (step.action === 'chip' && step.description.includes('Bench Boost')) benchBoost = true;
+    if (step.action === 'chip' && step.description.includes('Triple Captain')) tripleCaptain = true;
   });
 
   let squad;
@@ -3461,8 +3502,10 @@ function lockInGWTeam() {
   const scoringPlayers = benchBoost ? squad : starters;
   let totalPts = scoringPlayers.reduce((s, p) => s + (p.predicted_next_gw_points || 0), 0);
   const lockedCaptain = starters.find(p => p.is_captain);
-  if (lockedCaptain) totalPts += (lockedCaptain.predicted_next_gw_points || 0);
-  lockedGWSquad = { gameweek: gw, squad: squad, predicted_points: totalPts, benchBoost };
+  // Captain bonus: +1x for normal (2x total), +2x for TC (3x total)
+  if (lockedCaptain) totalPts += (lockedCaptain.predicted_next_gw_points || 0) * (tripleCaptain ? 2 : 1);
+  const chipCtx = tripleCaptain ? '3xc' : (benchBoost ? 'bboost' : null);
+  lockedGWSquad = { gameweek: gw, squad: squad, predicted_points: totalPts, benchBoost, chipCtx };
   renderLockedSquadPitch(lockedGWSquad);
 
   // Refresh Overview predicted pitch if visible
@@ -3479,9 +3522,17 @@ function renderLockedSquadPitch(data) {
   const starters = squad.filter(p => p.starter);
   const bench = squad.filter(p => !p.starter);
   const totalPts = data.predicted_points || 0;
+  const chipCtx = data.chipCtx;
 
   function card(p) {
-    const pts = p.predicted_next_gw_points != null ? Number(p.predicted_next_gw_points).toFixed(1) : '-';
+    let pts;
+    if (p.predicted_next_gw_points != null) {
+      let rawPred = Number(p.predicted_next_gw_points);
+      if (p.is_captain) rawPred *= (chipCtx === '3xc' ? 3 : 2);
+      pts = rawPred.toFixed(1);
+    } else {
+      pts = '-';
+    }
     let badge = '';
     let cardStyle = '';
     if (p.is_captain) {
@@ -3796,29 +3847,61 @@ function renderRecommendation(rec) {
     </div>`;
   }
 
-  // Predicted points: before vs after transfers
-  const afterPts = rec.predicted_points;
-  const beforePts = rec.current_xi_points;
-  if (afterPts != null && beforePts != null && nTransfers > 0) {
-    const diff = afterPts - beforePts;
-    const diffStr = diff >= 0 ? `+${diff.toFixed(1)}` : diff.toFixed(1);
-    const diffColor = diff > 0 ? 'var(--green)' : diff < 0 ? 'var(--red)' : 'var(--text2)';
-    html += `<div style="margin-top:12px;display:flex;align-items:center;gap:16px;flex-wrap:wrap">
-      <div style="padding:10px 14px;background:var(--surface);border:1px solid var(--border);border-radius:8px;text-align:center;min-width:120px">
-        <div style="font-size:11px;color:var(--text2);margin-bottom:2px">Keep current team</div>
-        <div style="font-size:22px;font-weight:700">${beforePts.toFixed(1)}</div>
-        <div style="font-size:11px;color:var(--text2)">predicted pts</div>
-      </div>
-      <div style="font-size:20px;color:var(--text2)">&rarr;</div>
-      <div style="padding:10px 14px;background:var(--surface);border:2px solid var(--green);border-radius:8px;text-align:center;min-width:120px">
-        <div style="font-size:11px;color:var(--text2);margin-bottom:2px">After transfers</div>
-        <div style="font-size:22px;font-weight:700">${afterPts.toFixed(1)}</div>
-        <div style="font-size:11px;color:var(--text2)">predicted pts</div>
-      </div>
-      <div style="font-size:16px;font-weight:700;color:${diffColor}">${diffStr}</div>
+  // Predicted points: up to 3 boxes showing progressive impact
+  const currentPts = rec.current_xi_points;   // Box 1: no changes
+  const basePts = rec.base_points;            // Box 2: after transfers only (no chip)
+  const fullPts = rec.predicted_points;       // Box 3: full recommendation (with chip)
+  const chip = rec.chip_suggestion;
+  const hasChipEffect = chip === 'bboost' || chip === '3xc';
+  const isWcFh = chip === 'wildcard' || chip === 'freehit';
+  const hasTransfers = nTransfers > 0;
+
+  if (currentPts != null && fullPts != null) {
+    html += `<div style="margin-top:12px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">`;
+
+    // Box 1: No changes (always shown)
+    html += `<div style="padding:10px 14px;background:var(--surface);border:1px solid var(--border);border-radius:8px;text-align:center;min-width:120px">
+      <div style="font-size:11px;color:var(--text2);margin-bottom:2px">No changes</div>
+      <div style="font-size:22px;font-weight:700">${currentPts.toFixed(1)}</div>
+      <div style="font-size:11px;color:var(--text2)">predicted pts</div>
     </div>`;
-  } else if (afterPts != null) {
-    html += `<p style="margin-top:12px;font-size:13px;color:var(--text2)">Predicted starting XI: <strong>${afterPts.toFixed(1)}</strong> pts</p>`;
+
+    // Box 2: After transfers (shown when transfers exist AND chip adds extra, or WC/FH)
+    if (hasTransfers && basePts != null && hasChipEffect) {
+      const tDiff = basePts - currentPts;
+      const tDiffStr = tDiff >= 0 ? `+${tDiff.toFixed(1)}` : tDiff.toFixed(1);
+      const tColor = tDiff > 0 ? 'var(--green)' : tDiff < 0 ? 'var(--red)' : 'var(--text2)';
+      html += `<div style="font-size:16px;color:var(--text2)">&rarr;</div>
+      <div style="padding:10px 14px;background:var(--surface);border:1px solid var(--border);border-radius:8px;text-align:center;min-width:120px">
+        <div style="font-size:11px;color:var(--text2);margin-bottom:2px">After transfers</div>
+        <div style="font-size:22px;font-weight:700">${basePts.toFixed(1)}</div>
+        <div style="font-size:11px;color:var(--text2)">predicted pts</div>
+        <div style="font-size:12px;font-weight:600;color:${tColor};margin-top:2px">${tDiffStr}</div>
+      </div>`;
+    }
+
+    // Box 3: Full recommendation (shown when there's any change from Box 1)
+    const showFull = (hasTransfers && !hasChipEffect) || hasChipEffect || isWcFh;
+    if (showFull && Math.abs(fullPts - currentPts) > 0.05) {
+      const fDiff = fullPts - currentPts;
+      const fDiffStr = fDiff >= 0 ? `+${fDiff.toFixed(1)}` : fDiff.toFixed(1);
+      const fColor = fDiff > 0 ? 'var(--green)' : fDiff < 0 ? 'var(--red)' : 'var(--text2)';
+      const chipLabel = chip === 'bboost' ? 'Bench Boost'
+        : chip === '3xc' ? 'Triple Captain'
+        : chip === 'wildcard' ? 'Wildcard'
+        : chip === 'freehit' ? 'Free Hit' : '';
+      const boxLabel = hasTransfers && !hasChipEffect ? 'After transfers'
+        : chipLabel ? `With ${chipLabel}` : 'Recommended';
+      html += `<div style="font-size:16px;color:var(--text2)">&rarr;</div>
+      <div style="padding:10px 14px;background:var(--surface);border:2px solid var(--green);border-radius:8px;text-align:center;min-width:120px">
+        <div style="font-size:11px;color:var(--text2);margin-bottom:2px">${boxLabel}</div>
+        <div style="font-size:22px;font-weight:700">${fullPts.toFixed(1)}</div>
+        <div style="font-size:11px;color:var(--text2)">predicted pts</div>
+        <div style="font-size:12px;font-weight:600;color:${fColor};margin-top:2px">${fDiffStr}</div>
+      </div>`;
+    }
+
+    html += `</div>`;
   }
   html += '</div>';
 

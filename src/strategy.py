@@ -671,6 +671,7 @@ class MultiWeekPlanner:
                             "ft_used": 0,
                             "ft_available": ft,
                             "predicted_points": round(pts, 2),
+                            "base_points": round(pts, 2),
                             "squad_ids": list(new_squad_ids),
                             "chip": gw_chip,
                             "new_squad": result["players"],
@@ -695,6 +696,7 @@ class MultiWeekPlanner:
                             "ft_used": 0,
                             "ft_available": ft,
                             "predicted_points": round(pts, 2),
+                            "base_points": round(pts, 2),
                             "squad_ids": list(squad_ids),
                             "chip": gw_chip,
                         })
@@ -710,6 +712,7 @@ class MultiWeekPlanner:
                 # No transfers: keep current squad
                 squad_preds = gw_df[gw_df["player_id"].isin(squad_ids)]
                 pts = self._squad_points_with_captain(squad_preds)
+                base_pts = pts  # pre-chip points (transfers + captain + hits, no chip)
 
                 # BB/TC chip adjustments
                 if gw_chip == "bboost" and len(squad_preds) > 11:
@@ -732,6 +735,7 @@ class MultiWeekPlanner:
                     "ft_used": 0,
                     "ft_available": ft,
                     "predicted_points": round(pts, 2),
+                    "base_points": round(base_pts, 2),
                     "squad_ids": list(squad_ids),
                     "chip": gw_chip,
                 })
@@ -751,6 +755,7 @@ class MultiWeekPlanner:
                     )
                     if result:
                         pts = result.get("net_points", result["starting_points"])
+                        base_pts = pts  # pre-chip points (transfers + captain + hits, no chip)
 
                         # BB/TC chip adjustments on transfer GWs
                         if gw_chip == "bboost":
@@ -802,6 +807,7 @@ class MultiWeekPlanner:
                             "ft_used": len(transfers_in),
                             "ft_available": ft,
                             "predicted_points": round(pts, 2),
+                            "base_points": round(base_pts, 2),
                             "squad_ids": list(new_squad_ids),
                             "chip": gw_chip,
                         })
@@ -814,6 +820,7 @@ class MultiWeekPlanner:
                         # Solver failed, keep current squad
                         squad_preds = gw_df[gw_df["player_id"].isin(squad_ids)]
                         pts = self._squad_points_with_captain(squad_preds)
+                        base_pts = pts  # pre-chip points
 
                         # Apply BB/TC even when solver fails
                         if gw_chip == "bboost":
@@ -834,6 +841,7 @@ class MultiWeekPlanner:
                             "ft_used": 0,
                             "ft_available": ft,
                             "predicted_points": round(pts, 2),
+                            "base_points": round(base_pts, 2),
                             "squad_ids": list(squad_ids),
                             "chip": gw_chip,
                         })
