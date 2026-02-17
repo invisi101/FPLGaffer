@@ -2865,11 +2865,15 @@ function renderSeasonTeamView(d) {
   const predLabel = useLocked ? `Locked-in GW${lockedGWSquad.gameweek}` : `Predicted ${gwLabel}`;
 
   // Total points this GW (include bench if Bench Boost active)
+  // Actuals (event_points) already include captain multiplier — no extra bonus needed
+  // Predictions (predicted_next_gw_points) are raw — add captain bonus
   const isBB = d.active_chip === 'bboost';
   const actualScorers = isBB ? d.squad : starters;
   const xiActual = actualScorers.reduce((s, p) => s + (p.event_points || 0), 0);
   const predScorers = (useLocked && lockedGWSquad.benchBoost) ? predSquad : predStarters;
-  const xiPred = predScorers.reduce((s, p) => s + (p.predicted_next_gw_points || 0), 0);
+  let xiPred = predScorers.reduce((s, p) => s + (p.predicted_next_gw_points || 0), 0);
+  const predCap = predStarters.find(p => p.is_captain);
+  if (predCap) xiPred += (predCap.predicted_next_gw_points || 0);
 
   function teamCard(p, mode) {
     const isActual = mode === 'actual';
@@ -3455,7 +3459,9 @@ function lockInGWTeam() {
   const gw = lastActionPlanData.gameweek || '?';
   const starters = squad.filter(p => p.starter);
   const scoringPlayers = benchBoost ? squad : starters;
-  const totalPts = scoringPlayers.reduce((s, p) => s + (p.predicted_next_gw_points || 0), 0);
+  let totalPts = scoringPlayers.reduce((s, p) => s + (p.predicted_next_gw_points || 0), 0);
+  const lockedCaptain = starters.find(p => p.is_captain);
+  if (lockedCaptain) totalPts += (lockedCaptain.predicted_next_gw_points || 0);
   lockedGWSquad = { gameweek: gw, squad: squad, predicted_points: totalPts, benchBoost };
   renderLockedSquadPitch(lockedGWSquad);
 
@@ -3790,82 +3796,30 @@ function renderRecommendation(rec) {
     </div>`;
   }
 
-  // Chip values
-  if (Object.keys(chipValues).length) {
-    html += '<div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">';
-    for (const [chip, val] of Object.entries(chipValues)) {
-      const label = {wildcard:'Wildcard',freehit:'Free Hit',bboost:'Bench Boost','3xc':'Triple Captain'}[chip] || chip;
-      html += `<span style="font-size:12px;padding:4px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:6px">${label}: <strong style="color:var(--accent)">+${val}</strong> pts</span>`;
-    }
-    html += '</div>';
+  // Predicted points: before vs after transfers
+  const afterPts = rec.predicted_points;
+  const beforePts = rec.current_xi_points;
+  if (afterPts != null && beforePts != null && nTransfers > 0) {
+    const diff = afterPts - beforePts;
+    const diffStr = diff >= 0 ? `+${diff.toFixed(1)}` : diff.toFixed(1);
+    const diffColor = diff > 0 ? 'var(--green)' : diff < 0 ? 'var(--red)' : 'var(--text2)';
+    html += `<div style="margin-top:12px;display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+      <div style="padding:10px 14px;background:var(--surface);border:1px solid var(--border);border-radius:8px;text-align:center;min-width:120px">
+        <div style="font-size:11px;color:var(--text2);margin-bottom:2px">Keep current team</div>
+        <div style="font-size:22px;font-weight:700">${beforePts.toFixed(1)}</div>
+        <div style="font-size:11px;color:var(--text2)">predicted pts</div>
+      </div>
+      <div style="font-size:20px;color:var(--text2)">&rarr;</div>
+      <div style="padding:10px 14px;background:var(--surface);border:2px solid var(--green);border-radius:8px;text-align:center;min-width:120px">
+        <div style="font-size:11px;color:var(--text2);margin-bottom:2px">After transfers</div>
+        <div style="font-size:22px;font-weight:700">${afterPts.toFixed(1)}</div>
+        <div style="font-size:11px;color:var(--text2)">predicted pts</div>
+      </div>
+      <div style="font-size:16px;font-weight:700;color:${diffColor}">${diffStr}</div>
+    </div>`;
+  } else if (afterPts != null) {
+    html += `<p style="margin-top:12px;font-size:13px;color:var(--text2)">Predicted starting XI: <strong>${afterPts.toFixed(1)}</strong> pts</p>`;
   }
-
-  // Why this transfer recommendation? (bank-vs-use reasoning)
-  if (bankAnalysis.recommendation) {
-    const strats = bankAnalysis.strategies || [];
-    const best = bankAnalysis.best_strategy || {};
-    const bestUse = best.use_this_week;
-    const baFTs = bankAnalysis.free_transfers;
-    const gw = rec.gameweek;
-    const nextGw = gw < 38 ? gw + 1 : gw;
-
-    const bankStrat = strats.find(s => s.use_this_week === 0);
-    const bankTotal = bankStrat ? bankStrat.total_2week : null;
-
-    // Build reasoning lines
-    let lines = [];
-
-    if (nTransfers > 0 && bestUse > 0) {
-      // Transfers were recommended — explain why using FTs now beats banking
-      if (bankTotal != null) {
-        const gain = best.total_2week - bankTotal;
-        if (gain > 0) {
-          lines.push(`Making the transfer${nTransfers > 1 ? 's' : ''} above is worth <span style="color:var(--green);font-weight:600">+${gain.toFixed(1)} pts</span> more over GW${gw}\u2013${nextGw} compared to saving your FT${baFTs > 1 ? 's' : ''}.`);
-        } else if (gain === 0) {
-          lines.push(`Transferring now scores the same over GW${gw}\u2013${nextGw} as banking, but gives you a stronger GW${gw} squad.`);
-        } else {
-          lines.push(`Banking would score <span style="color:var(--orange);font-weight:600">${Math.abs(gain).toFixed(1)} pts</span> more over GW${gw}\u2013${nextGw}, but the transfer improves your immediate squad.`);
-        }
-      }
-      lines.push(`After transferring, you'll have <strong>${best.fts_next_week} FT${best.fts_next_week > 1 ? 's' : ''}</strong> for GW${nextGw}.`);
-    } else if (nTransfers === 0 && bestUse === 0) {
-      // No transfers recommended and banking is best — explain why
-      lines.push(`No upgrade available this week is worth using a transfer on.`);
-      lines.push(`Banking gives you <strong>${best.fts_next_week} FT${best.fts_next_week > 1 ? 's' : ''}</strong> for GW${nextGw}` +
-        (best.fts_next_week >= 2 ? `, opening up stronger moves next week.` : `.`));
-      if (bankTotal != null) {
-        const useStrat = strats.find(s => s.use_this_week > 0);
-        if (useStrat) {
-          const cost = bankTotal - useStrat.total_2week;
-          if (cost > 0) lines.push(`Saving is worth <span style="color:var(--green);font-weight:600">+${cost.toFixed(1)} pts</span> more than the best transfer over GW${gw}\u2013${nextGw}.`);
-        }
-      }
-    } else if (nTransfers > 0 && bestUse === 0) {
-      // Transfers recommended by 5-GW planner but 2-week lookahead prefers banking
-      // The 5-GW planner sees further ahead — show both perspectives
-      lines.push(`The transfer above is recommended based on the full 5-week outlook.`);
-      if (bankTotal != null) {
-        const useStrat = strats.find(s => s.use_this_week > 0);
-        if (useStrat) {
-          const diff = useStrat.total_2week - bankTotal;
-          if (diff < 0) lines.push(`Over just GW${gw}\u2013${nextGw}, banking would score <span style="color:var(--text2)">${Math.abs(diff).toFixed(1)} pts</span> more — but the longer-term fixture swing makes the transfer worthwhile.`);
-        }
-      }
-    } else if (nTransfers === 0 && bestUse > 0) {
-      // No transfers shown but lookahead thinks using FTs is better
-      // The main recommendation takes priority
-      lines.push(`Banking your FT gives you <strong>${bankStrat ? bankStrat.fts_next_week : baFTs + 1} FT${(bankStrat ? bankStrat.fts_next_week : baFTs + 1) > 1 ? 's' : ''}</strong> for GW${nextGw}.`);
-    }
-
-    if (lines.length) {
-      html += `<div style="margin-top:10px;padding:10px 14px;background:var(--surface);border:1px solid var(--border);border-radius:8px">
-        <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:4px">Why?</div>
-        <div style="font-size:12px;line-height:1.6">${lines.join('<br>')}</div>
-      </div>`;
-    }
-  }
-
-  html += `<p style="margin-top:12px;font-size:12px;color:var(--text2)">Predicted starting XI: ${rec.predicted_points?.toFixed(1) || '-'} pts</p>`;
   html += '</div>';
 
   document.getElementById('recommendationDisplay').innerHTML = html;

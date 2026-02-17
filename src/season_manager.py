@@ -758,6 +758,23 @@ class SeasonManager:
             code_to_short,
         )
 
+        # Adjust current_xi_points to include chip effects for fair comparison
+        # predicted_points from the planner already includes BB/TC effects,
+        # so current_xi_points must reflect the same chip on the unchanged team.
+        if chip_suggestion == "bboost":
+            bench_players = [p for p in current_squad if not p["starter"]]
+            bench_pts = sum(
+                pred_map.get(p["player_id"], {}).get(target_col, 0) or 0
+                for p in bench_players
+            )
+            current_xi_points = round(current_xi_points + bench_pts, 2)
+        elif chip_suggestion == "3xc":
+            # TC gives 3x instead of 2x; current_xi_points already has 2x captain,
+            # so add one more captain bonus to match
+            if current_captain:
+                cap_pred = pred_map.get(current_captain["player_id"], {}).get(target_col, 0) or 0
+                current_xi_points = round(current_xi_points + cap_pred, 2)
+
         # Save to DB
         self.db.save_recommendation(
             season_id=season_id,
@@ -770,6 +787,7 @@ class SeasonManager:
             bank_analysis_json=json.dumps(bank_analysis),
             new_squad_json=new_squad_json,
             predicted_points=predicted_points,
+            current_xi_points=current_xi_points,
             free_transfers=free_transfers,
         )
 
@@ -1478,6 +1496,7 @@ class SeasonManager:
             bank_analysis_json=json.dumps({}),
             new_squad_json=json.dumps(scrub_nan(result["players"])),
             predicted_points=result["starting_points"],
+            current_xi_points=result["starting_points"],
             free_transfers=1,
         )
 

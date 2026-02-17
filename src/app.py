@@ -983,10 +983,16 @@ def api_my_team():
         squad.append(player)
 
     # Compute starting XI points
+    # Predictions need captain bonus added (raw values, no multiplier)
+    # Actuals already include captain multiplier via event_points = raw * multiplier
     starters = [p for p in squad if p["starter"]]
+    captain = next((p for p in starters if p.get("is_captain")), None)
     xi_pred_gw = sum(p.get("predicted_next_gw_points") or 0 for p in starters)
     xi_pred_3gw = sum(p.get("predicted_next_3gw_points") or 0 for p in starters)
     xi_actual_gw = sum(p.get("event_points") or 0 for p in starters)
+    if captain:
+        xi_pred_gw += captain.get("predicted_next_gw_points") or 0
+        xi_pred_3gw += captain.get("predicted_next_3gw_points") or 0
 
     # Squad value: now_cost sum (matches FPL app) vs selling value (from API)
     squad_value_now_cost = round(sum(p["cost"] for p in squad), 1)
