@@ -445,7 +445,10 @@ def solve_transfer_milp_with_hits(
         best["net_points"] = round(best_net, 2)
 
     # Count forced replacements — current players missing from pool are unavoidable
-    pool_ids = set(player_df["player_id"].dropna().astype(int))
+    # Must match the solver's internal dropna logic (drops rows missing any required column)
+    required = ["player_id", "position", "cost", target_col]
+    clean_pool = player_df.dropna(subset=[c for c in required if c in player_df.columns])
+    pool_ids = set(clean_pool["player_id"].astype(int))
     forced_replacements = len(current_player_ids - pool_ids)
 
     for n in range(1, max_transfers + 1):

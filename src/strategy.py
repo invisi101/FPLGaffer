@@ -52,8 +52,8 @@ class ChipEvaluator:
 
         # Filter to current half-season only (chips expire at half boundary)
         if all_gws:
-            first_gw = min(all_gws)
-            if first_gw <= 19:
+            current_gw = min(pred_gws) if pred_gws else min(all_gws)
+            if current_gw <= 19:
                 all_gws = [gw for gw in all_gws if gw <= 19]
             else:
                 all_gws = [gw for gw in all_gws if gw >= 20]
@@ -144,7 +144,7 @@ class ChipEvaluator:
                 # optimal squad so BB value reflects a realistic future bench
                 if gw == pred_gws[0]:
                     squad_preds = gw_df[gw_df["player_id"].isin(current_squad_ids)]
-                    if len(squad_preds) >= 15:
+                    if len(squad_preds) >= 11:
                         xi = MultiWeekPlanner._select_formation_xi(squad_preds)
                         xi_ids = set(xi.index)
                         bench = squad_preds.loc[~squad_preds.index.isin(xi_ids)]
@@ -232,7 +232,7 @@ class ChipEvaluator:
                     curr_result = solve_milp_team(squad_preds, "predicted_points", budget=9999, captain_col=cap_col)
                     current_pts = curr_result["starting_points"] if curr_result else 0
                 if current_pts == 0 and not squad_preds.empty:
-                    current_pts = squad_preds.nlargest(min(11, len(squad_preds)), "predicted_points")["predicted_points"].sum()
+                    current_pts = MultiWeekPlanner._squad_points_with_captain(squad_preds)
 
                 # Solve unconstrained best XI (need full pool with position/cost)
                 pool = gw_df.copy()
@@ -300,6 +300,7 @@ class ChipEvaluator:
                 if "position" in first_gw_preds.columns:
                     pos_map = first_gw_preds.drop_duplicates("player_id").set_index("player_id")["position"]
                     squad_combined["position"] = squad_combined["player_id"].map(pos_map)
+                    squad_combined = squad_combined.dropna(subset=["position"])
                 if len(squad_combined) >= 11:
                     xi = MultiWeekPlanner._select_formation_xi(squad_combined)
                     current_3gw = xi["predicted_points"].sum()
