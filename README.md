@@ -42,7 +42,7 @@ No Python installation required.
 
 ```bash
 git clone https://github.com/invisi101/FPLGaffer.git
-cd fplmanager
+cd FPLGaffer
 ./setup-mac.sh
 ```
 
@@ -52,11 +52,10 @@ This creates a virtual environment, installs dependencies, and installs **Gaffer
 
 ```bash
 git clone https://github.com/invisi101/FPLGaffer.git
-cd fplmanager
+cd FPLGaffer
 python3 -m venv .venv
-source .venv/bin/activate
-pip3 install -r requirements.txt
-python3 -m src.app
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python -m src.app
 ```
 
 Open http://127.0.0.1:9875 in your browser.
@@ -112,10 +111,10 @@ Track your entire FPL season from any gameweek:
 ## CLI
 
 ```bash
-python -m src.predict                      # predictions only
-python -m src.predict --train --tune       # train models then predict
-python -m src.predict --feature-selection  # run feature selection
-python -m src.predict --force-fetch        # force re-fetch all data
+.venv/bin/python -m src.predict                      # predictions only
+.venv/bin/python -m src.predict --train --tune       # train models then predict
+.venv/bin/python -m src.predict --feature-selection  # run feature selection
+.venv/bin/python -m src.predict --force-fetch        # force re-fetch all data
 ```
 
 ---
