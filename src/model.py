@@ -953,7 +953,16 @@ def predict_decomposed(
     cop = pos_df["chance_of_playing"].fillna(100) / 100.0 if "chance_of_playing" in pos_df.columns else 0.8
     avail = pos_df["availability_rate_last5"].fillna(0.75) if "availability_rate_last5" in pos_df.columns else pd.Series(0.75, index=pos_df.index)
     pos_df["p_plays"] = (cop * avail).clip(0, 1)
-    pos_df["p_60plus"] = pos_df["p_plays"] * 0.85
+    # Per-player P(60+ | plays) from minutes history instead of blanket 0.85.
+    # avg_mins_per_appearance / 90 gives ~1.0 for full-game starters, ~0.33 for
+    # super-subs, improving CS and appearance point estimates.
+    if "player_minutes_played_last5" in pos_df.columns and "availability_rate_last5" in pos_df.columns:
+        _games = (pos_df["availability_rate_last5"].fillna(0.75) * 5).clip(lower=0.5)
+        _avg_mins = pos_df["player_minutes_played_last5"].fillna(0) / _games
+        _p60_rate = (_avg_mins / 90.0).clip(0.1, 0.99)
+        pos_df["p_60plus"] = pos_df["p_plays"] * _p60_rate
+    else:
+        pos_df["p_60plus"] = pos_df["p_plays"] * 0.85
 
     # Appearance points: E[appearance] = P(60+)*2 + (P(plays)-P(60+))*1
     pos_df["pts_appearance"] = (

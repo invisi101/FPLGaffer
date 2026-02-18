@@ -192,6 +192,51 @@ def _build_offset_snapshot(
     return snapshot
 
 
+ENSEMBLE_WEIGHT_DECOMPOSED = 0.5
+
+
+def _ensemble_predict_position(snapshot: pd.DataFrame, position: str) -> pd.DataFrame:
+    """Predict for a position using the 50/50 ensemble blend.
+
+    Blends decomposed sub-models with mean regression when both available.
+    Falls back to whichever exists alone.  Returns DataFrame with at least
+    player_id and predicted_next_gw_points columns, or empty DataFrame.
+    """
+    pred_col = "predicted_next_gw_points"
+
+    components = SUB_MODELS_FOR_POSITION.get(position, [])
+    has_sub = all(
+        load_sub_model(position, comp) is not None for comp in components
+    ) if components else False
+
+    decomp_preds = predict_decomposed(snapshot, position) if has_sub else pd.DataFrame()
+
+    model_dict = load_model(position, "next_gw_points")
+    mean_preds = (
+        predict_for_position(snapshot, position, "next_gw_points", model_dict)
+        if model_dict is not None else pd.DataFrame()
+    )
+
+    if not decomp_preds.empty and not mean_preds.empty:
+        w_d = ENSEMBLE_WEIGHT_DECOMPOSED
+        w_m = 1 - w_d
+        merged = decomp_preds[["player_id", pred_col]].merge(
+            mean_preds[["player_id", pred_col]],
+            on="player_id", suffixes=("_decomp", "_mean"),
+        )
+        merged[pred_col] = (
+            w_d * merged[f"{pred_col}_decomp"]
+            + w_m * merged[f"{pred_col}_mean"]
+        )
+        meta_cols = [c for c in decomp_preds.columns if c != pred_col]
+        return decomp_preds[meta_cols].merge(merged[["player_id", pred_col]], on="player_id")
+    elif not decomp_preds.empty:
+        return decomp_preds
+    elif not mean_preds.empty:
+        return mean_preds
+    return pd.DataFrame()
+
+
 def _predict_next_3gw_from_1gw(
     current: pd.DataFrame,
     df: pd.DataFrame,
@@ -201,7 +246,7 @@ def _predict_next_3gw_from_1gw(
     """Predict next-3-GW points by summing three 1-GW predictions.
 
     For each of the next 3 GWs, builds a snapshot with that GW's opponent data
-    and runs the 1-GW model. Returns a DataFrame with player_id and
+    and runs the 1-GW ensemble model.  Returns a DataFrame with player_id and
     predicted_next_3gw_points (the sum of the three per-GW predictions).
     """
     fixture_map = fixture_context["fixture_map"]
@@ -222,21 +267,7 @@ def _predict_next_3gw_from_1gw(
 
         gw_preds = []
         for position in POSITION_GROUPS:
-            # Use decomposed sub-models when available
-            components = SUB_MODELS_FOR_POSITION.get(position, [])
-            has_sub = all(
-                load_sub_model(position, comp) is not None for comp in components
-            ) if components else False
-
-            if has_sub:
-                preds = predict_decomposed(snapshot, position)
-            else:
-                model_dict = load_model(position, "next_gw_points")
-                if model_dict is None:
-                    continue
-                preds = predict_for_position(
-                    snapshot, position, "next_gw_points", model_dict,
-                )
+            preds = _ensemble_predict_position(snapshot, position)
             if not preds.empty:
                 gw_preds.append(preds[["player_id", "predicted_next_gw_points"]].copy())
 
@@ -291,20 +322,7 @@ def predict_future_gw(
 
     gw_preds = []
     for position in POSITION_GROUPS:
-        components = SUB_MODELS_FOR_POSITION.get(position, [])
-        has_sub = all(
-            load_sub_model(position, comp) is not None for comp in components
-        ) if components else False
-
-        if has_sub:
-            preds = predict_decomposed(snapshot, position)
-        else:
-            model_dict = load_model(position, "next_gw_points")
-            if model_dict is None:
-                continue
-            preds = predict_for_position(
-                snapshot, position, "next_gw_points", model_dict,
-            )
+        preds = _ensemble_predict_position(snapshot, position)
         if not preds.empty:
             gw_preds.append(preds[["player_id", "predicted_next_gw_points"]].copy())
 
@@ -392,53 +410,18 @@ def build_preseason_predictions(
         return pd.DataFrame()
 
     # Run model predictions on the snapshot (ensemble when both models available)
-    ENSEMBLE_WEIGHT_DECOMPOSED = 0.5
     all_preds = []
     for position in POSITION_GROUPS:
         pred_col = "predicted_next_gw_points"
         keep = ["player_id", "position_clean", pred_col]
 
-        components = SUB_MODELS_FOR_POSITION.get(position, [])
-        has_sub = all(
-            load_sub_model(position, comp) is not None for comp in components
-        ) if components else False
-        decomp_preds = pd.DataFrame()
-        if has_sub:
-            decomp_preds = predict_decomposed(snapshot, position)
-
-        mean_preds = pd.DataFrame()
-        model_dict = load_model(position, "next_gw_points")
-        if model_dict is not None:
-            mean_preds = predict_for_position(
-                snapshot, position, "next_gw_points", model_dict,
-            )
-
-        if not decomp_preds.empty and not mean_preds.empty:
-            w_d = ENSEMBLE_WEIGHT_DECOMPOSED
-            w_m = 1 - w_d
-            merged = decomp_preds[["player_id", pred_col]].merge(
-                mean_preds[["player_id", pred_col]],
-                on="player_id", suffixes=("_decomp", "_mean"),
-            )
-            merged[pred_col] = (
-                w_d * merged[f"{pred_col}_decomp"]
-                + w_m * merged[f"{pred_col}_mean"]
-            )
-            meta_cols = [c for c in decomp_preds.columns if c != pred_col]
-            preds = decomp_preds[meta_cols].merge(
-                merged[["player_id", pred_col]], on="player_id",
-            )
-        elif not decomp_preds.empty:
-            preds = decomp_preds
-        elif not mean_preds.empty:
-            preds = mean_preds
-        else:
+        preds = _ensemble_predict_position(snapshot, position)
+        if preds.empty:
             continue
 
-        if not preds.empty:
-            if "web_name" in preds.columns and "web_name" not in keep:
-                keep.insert(1, "web_name")
-            all_preds.append(preds[keep].copy())
+        if "web_name" in preds.columns and "web_name" not in keep:
+            keep.insert(1, "web_name")
+        all_preds.append(preds[keep].copy())
 
     if not all_preds:
         print("  No pre-season predictions generated (no models?).")
@@ -494,60 +477,17 @@ def run_predictions(df: pd.DataFrame, data: dict | None = None) -> pd.DataFrame:
     # --- 1-GW predictions (next_gw_points) ---
     # Ensemble: blend decomposed sub-models with mean regression model (50/50)
     # when both are available. Fall back to whichever exists alone.
-    ENSEMBLE_WEIGHT_DECOMPOSED = 0.5
     all_preds = []
     for position in POSITION_GROUPS:
         pred_col = "predicted_next_gw_points"
         keep = ["player_id", "position_clean", pred_col]
 
-        # Try decomposed sub-models
-        components = SUB_MODELS_FOR_POSITION.get(position, [])
-        has_sub = all(
-            load_sub_model(position, comp) is not None for comp in components
-        ) if components else False
-        decomp_preds = pd.DataFrame()
-        if has_sub:
-            decomp_preds = predict_decomposed(current, position)
-
-        # Try mean regression model
-        mean_preds = pd.DataFrame()
-        model_dict = load_model(position, "next_gw_points")
-        if model_dict is not None:
-            mean_preds = predict_for_position(current, position, "next_gw_points", model_dict)
-
-        # Blend or fall back
-        if not decomp_preds.empty and not mean_preds.empty:
-            # Ensemble: merge on player_id and blend
-            w_d = ENSEMBLE_WEIGHT_DECOMPOSED
-            w_m = 1 - w_d
-            merged = decomp_preds[["player_id", pred_col]].merge(
-                mean_preds[["player_id", pred_col]],
-                on="player_id", suffixes=("_decomp", "_mean"),
-            )
-            merged[pred_col] = (
-                w_d * merged[f"{pred_col}_decomp"]
-                + w_m * merged[f"{pred_col}_mean"]
-            )
-            # Carry metadata from decomposed predictions (has more columns)
-            meta_cols = [c for c in decomp_preds.columns if c != pred_col]
-            preds = decomp_preds[meta_cols].merge(
-                merged[["player_id", pred_col]], on="player_id",
-            )
+        preds = _ensemble_predict_position(current, position)
+        if not preds.empty:
             if "web_name" in preds.columns and "web_name" not in keep:
                 keep.insert(1, "web_name")
             all_preds.append(preds[keep].copy())
-            print(f"  {position}: ensemble prediction ({len(preds)} players, "
-                  f"{w_d:.0%} decomposed + {w_m:.0%} mean)")
-        elif not decomp_preds.empty:
-            if "web_name" in decomp_preds.columns and "web_name" not in keep:
-                keep.insert(1, "web_name")
-            all_preds.append(decomp_preds[keep].copy())
-            print(f"  {position}: decomposed-only prediction ({len(decomp_preds)} players)")
-        elif not mean_preds.empty:
-            if "web_name" in mean_preds.columns and "web_name" not in keep:
-                keep.insert(1, "web_name")
-            all_preds.append(mean_preds[keep].copy())
-            print(f"  {position}: mean-only prediction ({len(mean_preds)} players)")
+            print(f"  {position}: {len(preds)} players")
         else:
             print(f"  No trained model for {position}/next_gw_points")
 
@@ -631,6 +571,36 @@ def run_predictions(df: pd.DataFrame, data: dict | None = None) -> pd.DataFrame:
         )
     elif "predicted_next_gw_points" in result.columns:
         result["captain_score"] = result["predicted_next_gw_points"]
+
+    # --- Availability adjustments: zero predictions for unavailable players ---
+    if data is not None:
+        bootstrap_elements = (
+            data.get("api", {}).get("bootstrap", {}).get("elements", [])
+        )
+        if bootstrap_elements:
+            unavailable_ids = set()
+            for el in bootstrap_elements:
+                status = el.get("status", "a")
+                chance = el.get("chance_of_playing_next_round")
+                pid = el["id"]
+                # Injured, suspended, unavailable, or left the league
+                if status in ("i", "s", "u", "n"):
+                    unavailable_ids.add(pid)
+                # Doubtful: <50% chance of playing next round
+                elif chance is not None and chance < 50:
+                    unavailable_ids.add(pid)
+
+            if unavailable_ids:
+                mask = result["player_id"].isin(unavailable_ids)
+                n_zeroed = mask.sum()
+                pred_cols = [
+                    c for c in result.columns
+                    if c.startswith("predicted_") or c in ("captain_score",)
+                ]
+                for col in pred_cols:
+                    result.loc[mask, col] = 0.0
+                if n_zeroed > 0:
+                    print(f"  Zeroed predictions for {n_zeroed} unavailable/doubtful players")
 
     return result
 
