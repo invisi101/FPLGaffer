@@ -2879,26 +2879,14 @@ function renderMyTeam(d) {
     </div>`;
   }
 
-  const display = document.getElementById('myTeamDisplay');
-  display.innerHTML = `<div class="compare-pitches">
-    <div class="compare-side">
-      <h3 style="color:var(--orange)">${curGwLabel} Actual (${d.xi_actual_gw} pts)</h3>
-      ${buildMyTeamPitch(starters, 'actual')}
-    </div>
-    <div class="compare-side">
-      <h3 style="color:var(--green)">Optimal ${gwLabel} (${Number(d.xi_pred_gw).toFixed(1)} pts)</h3>
-      ${buildMyTeamPitch(optStarters, 'predicted')}
-    </div>
-  </div>`;
-
-  // Bench (show optimized bench with predicted points)
-  if (optBench.length) {
-    const benchArea = document.createElement('div');
-    benchArea.className = 'bench-area';
-    benchArea.innerHTML = `<div class="bench-label">Bench</div>
-      <div class="bench-row">${optBench.map(p => {
-        const actualPts = p.event_points != null ? Number(p.event_points).toFixed(0) : '-';
-        const predPts = p.predicted_next_gw_points != null ? Number(p.predicted_next_gw_points).toFixed(1) : '-';
+  function buildMyTeamBench(players, mode) {
+    if (!players || !players.length) return '';
+    return `<div class="bench-area"><div class="bench-label">Bench</div>
+      <div class="bench-row">${players.map(p => {
+        const pts = mode === 'actual'
+          ? (p.event_points_raw != null ? Number(p.event_points_raw).toFixed(0) : '-')
+          : (p.predicted_next_gw_points != null ? Number(p.predicted_next_gw_points).toFixed(1) : '-');
+        const ptsColor = mode === 'actual' ? 'var(--orange)' : 'var(--accent)';
         let statusCls = '';
         let statusText = '';
         if (p.status === 'i') { statusCls = 'injured'; statusText = 'Injured'; }
@@ -2908,16 +2896,25 @@ function renderMyTeam(d) {
         return `<div class="bench-card">
           <div class="p-name">${p.web_name || '-'}</div>
           <div class="p-team">${p.team || ''} &middot; ${Number(p.cost).toFixed(1)}m</div>
-          <div style="display:flex;gap:8px;justify-content:center">
-            <div class="p-pts" style="color:var(--orange);font-size:13px">${actualPts}</div>
-            <div style="color:var(--text2);font-size:13px">/</div>
-            <div class="p-pts" style="font-size:13px">${predPts}</div>
-          </div>
+          <div class="p-pts" style="color:${ptsColor}">${pts}</div>
           ${statusHtml}
         </div>`;
-      }).join('')}</div>`;
-    display.appendChild(benchArea);
+      }).join('')}</div></div>`;
   }
+
+  const display = document.getElementById('myTeamDisplay');
+  display.innerHTML = `<div class="compare-pitches">
+    <div class="compare-side">
+      <h3 style="color:var(--orange)">${curGwLabel} Actual (${d.xi_actual_gw} pts)</h3>
+      ${buildMyTeamPitch(starters, 'actual')}
+      ${buildMyTeamBench(bench, 'actual')}
+    </div>
+    <div class="compare-side">
+      <h3 style="color:var(--green)">Optimal ${gwLabel} (${Number(d.xi_pred_gw).toFixed(1)} pts)</h3>
+      ${buildMyTeamPitch(optStarters, 'predicted')}
+      ${buildMyTeamBench(optBench, 'predicted')}
+    </div>
+  </div>`;
 }
 
 // ---------------------------------------------------------------------------
