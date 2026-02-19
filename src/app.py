@@ -42,7 +42,7 @@ from src.model import (
     train_all_sub_models,
 )
 from src.backtest import predict_single_gw, run_backtest
-from src.predict import OUTPUT_DIR, format_predictions, run_predictions
+from src.predict import OUTPUT_DIR, format_predictions, run_predictions, save_prediction_details
 from src.solver import scrub_nan as _scrub_nan, solve_milp_team as _solve_milp_team, solve_transfer_milp as _solve_transfer_milp, solve_transfer_milp_with_hits as _solve_transfer_milp_with_hits
 from src.season_db import SeasonDB
 from src.season_manager import SeasonManager, scrub_nan_recursive
@@ -321,6 +321,7 @@ def api_refresh_data():
                 result = format_predictions(preds, df)
                 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
                 result.to_csv(OUTPUT_DIR / "predictions.csv", index=False, encoding="utf-8")
+                save_prediction_details(result, data=data)
                 print("Predictions updated.")
 
         # Auto-replan: check if existing strategic plan needs updating
@@ -402,6 +403,7 @@ def api_train():
             result = format_predictions(preds, df)
             OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
             result.to_csv(OUTPUT_DIR / "predictions.csv", index=False, encoding="utf-8")
+            save_prediction_details(result, data=data)
             print(f"Predictions saved.")
 
     started = _run_in_background("Train Models", do_train)
@@ -1561,6 +1563,348 @@ def api_team_form():
         "gw_columns": finished_gws,
         "teams": sorted(teams.values(), key=lambda t: -t["form_points"]),
     })
+
+
+# ---------------------------------------------------------------------------
+# Players Drill-Down Endpoints
+# ---------------------------------------------------------------------------
+
+# In-memory cache for combined per-GW CSVs (avoids re-reading 50+ files per request)
+_player_match_cache = {"pms": None, "mat": None, "ts": 0}
+
+
+def _get_combined_match_data():
+    """Load and cache combined playermatchstats + matches DataFrames."""
+    import time as _time
+    now = _time.time()
+    # Refresh every 30 minutes (matches cache lifetime)
+    if _player_match_cache["pms"] is not None and now - _player_match_cache["ts"] < 1800:
+        return _player_match_cache["pms"], _player_match_cache["mat"]
+
+    pms_frames = []
+    mat_frames = []
+    for gw_num in range(1, 39):
+        pms_path = CACHE_DIR / f"2025-2026_gw{gw_num}_playermatchstats.csv"
+        mat_path = CACHE_DIR / f"2025-2026_gw{gw_num}_matches.csv"
+        if not pms_path.exists() or not mat_path.exists():
+            continue
+        try:
+            pms_df = pd.read_csv(pms_path)
+            pms_df["_gw"] = gw_num
+            pms_frames.append(pms_df)
+            mat_df = pd.read_csv(mat_path)
+            mat_df["_gw"] = gw_num
+            mat_frames.append(mat_df)
+        except Exception:
+            continue
+
+    combined_pms = pd.concat(pms_frames, ignore_index=True) if pms_frames else pd.DataFrame()
+    combined_mat = pd.concat(mat_frames, ignore_index=True) if mat_frames else pd.DataFrame()
+    _player_match_cache["pms"] = combined_pms
+    _player_match_cache["mat"] = combined_mat
+    _player_match_cache["ts"] = now
+    return combined_pms, combined_mat
+
+@app.route("/api/players/teams")
+def api_players_teams():
+    """Return all 20 teams with players grouped by position."""
+    bootstrap_path = CACHE_DIR / "fpl_api_bootstrap.json"
+    if not bootstrap_path.exists():
+        return jsonify({"error": "No cached data. Click 'Get Latest Data' first."}), 400
+
+    bootstrap = json.loads(bootstrap_path.read_text(encoding="utf-8"))
+    pos_map = {1: "GKP", 2: "DEF", 3: "MID", 4: "FWD"}
+    team_info = {}
+    for t in bootstrap.get("teams", []):
+        team_info[t["id"]] = {
+            "id": t["id"],
+            "code": t.get("code"),
+            "name": t["name"],
+            "short_name": t["short_name"],
+            "players": {"GKP": [], "DEF": [], "MID": [], "FWD": []},
+            "player_count": 0,
+        }
+
+    for el in bootstrap.get("elements", []):
+        tid = el.get("team")
+        if tid not in team_info:
+            continue
+        pos = pos_map.get(el.get("element_type"), "MID")
+        team_info[tid]["players"][pos].append({
+            "id": el["id"],
+            "code": el.get("code"),
+            "web_name": el.get("web_name", ""),
+            "first_name": el.get("first_name", ""),
+            "second_name": el.get("second_name", ""),
+            "position": pos,
+            "now_cost": round(el.get("now_cost", 0) / 10, 1),
+            "total_points": el.get("total_points", 0),
+            "goals_scored": el.get("goals_scored", 0),
+            "assists": el.get("assists", 0),
+            "clean_sheets": el.get("clean_sheets", 0),
+            "minutes": el.get("minutes", 0),
+            "bonus": el.get("bonus", 0),
+            "form": el.get("form", "0.0"),
+            "points_per_game": el.get("points_per_game", "0.0"),
+            "selected_by_percent": el.get("selected_by_percent", "0.0"),
+            "status": el.get("status", "a"),
+            "chance_of_playing_next_round": el.get("chance_of_playing_next_round"),
+            "news": el.get("news", ""),
+            "event_points": el.get("event_points", 0),
+            "starts": el.get("starts", 0),
+        })
+        team_info[tid]["player_count"] += 1
+
+    # Sort players within each position by total_points desc
+    for t in team_info.values():
+        for pos in t["players"]:
+            t["players"][pos].sort(key=lambda p: -p["total_points"])
+
+    # Sort teams alphabetically
+    teams_list = sorted(team_info.values(), key=lambda t: t["name"])
+    return jsonify({"teams": teams_list})
+
+
+@app.route("/api/players/<int:player_id>/detail")
+def api_player_detail(player_id):
+    """Comprehensive player detail: info, per-GW history, match stats, fixtures, predictions."""
+    bootstrap_path = CACHE_DIR / "fpl_api_bootstrap.json"
+    if not bootstrap_path.exists():
+        return jsonify({"error": "No cached data. Click 'Get Latest Data' first."}), 400
+
+    bootstrap = json.loads(bootstrap_path.read_text(encoding="utf-8"))
+    pos_map = {1: "GKP", 2: "DEF", 3: "MID", 4: "FWD"}
+    team_map = {t["id"]: t for t in bootstrap.get("teams", [])}
+    team_code_map = {t["code"]: t for t in bootstrap.get("teams", [])}
+
+    # Find the player in bootstrap
+    player_el = None
+    for el in bootstrap.get("elements", []):
+        if el["id"] == player_id:
+            player_el = el
+            break
+    if not player_el:
+        return jsonify({"error": f"Player {player_id} not found."}), 404
+
+    team = team_map.get(player_el.get("team"), {})
+    player_info = {
+        "id": player_el["id"],
+        "code": player_el.get("code"),
+        "web_name": player_el.get("web_name", ""),
+        "first_name": player_el.get("first_name", ""),
+        "second_name": player_el.get("second_name", ""),
+        "position": pos_map.get(player_el.get("element_type"), "MID"),
+        "team_id": player_el.get("team"),
+        "team_name": team.get("name", ""),
+        "team_short": team.get("short_name", ""),
+        "team_code": team.get("code"),
+        "now_cost": round(player_el.get("now_cost", 0) / 10, 1),
+        "total_points": player_el.get("total_points", 0),
+        "goals_scored": player_el.get("goals_scored", 0),
+        "assists": player_el.get("assists", 0),
+        "clean_sheets": player_el.get("clean_sheets", 0),
+        "minutes": player_el.get("minutes", 0),
+        "bonus": player_el.get("bonus", 0),
+        "form": player_el.get("form", "0.0"),
+        "points_per_game": player_el.get("points_per_game", "0.0"),
+        "selected_by_percent": player_el.get("selected_by_percent", "0.0"),
+        "status": player_el.get("status", "a"),
+        "chance_of_playing_next_round": player_el.get("chance_of_playing_next_round"),
+        "news": player_el.get("news", ""),
+        "event_points": player_el.get("event_points", 0),
+        "starts": player_el.get("starts", 0),
+        "expected_goals": player_el.get("expected_goals", "0.00"),
+        "expected_assists": player_el.get("expected_assists", "0.00"),
+        "expected_goal_involvements": player_el.get("expected_goal_involvements", "0.00"),
+        "ict_index": player_el.get("ict_index", "0.0"),
+        "influence": player_el.get("influence", "0.0"),
+        "creativity": player_el.get("creativity", "0.0"),
+        "threat": player_el.get("threat", "0.0"),
+    }
+
+    # --- Per-GW history from playerstats CSV ---
+    gw_history = []
+    available_gws = []
+    playerstats_path = CACHE_DIR / "2025-2026_playerstats.csv"
+    if playerstats_path.exists():
+        try:
+            ps_df = pd.read_csv(playerstats_path)
+            ps_player = ps_df[ps_df["id"] == player_id].sort_values("gw").reset_index(drop=True)
+            if not ps_player.empty:
+                cumulative_cols = [
+                    "minutes", "goals_scored", "assists", "clean_sheets",
+                    "goals_conceded", "own_goals", "yellow_cards", "red_cards",
+                    "saves", "bonus", "bps", "starts",
+                ]
+                for i, row in ps_player.iterrows():
+                    gw_num = int(row["gw"])
+                    available_gws.append(gw_num)
+                    entry = {"gw": gw_num, "event_points": int(row.get("event_points", 0))}
+                    for col in cumulative_cols:
+                        curr = row.get(col, 0)
+                        prev = ps_player.iloc[i - 1][col] if i > 0 else 0
+                        curr = curr if pd.notna(curr) else 0
+                        prev = prev if pd.notna(prev) else 0
+                        entry[col] = int(curr - prev)
+                    gw_history.append(entry)
+        except Exception:
+            pass
+
+    # --- Match stats from cached combined DataFrames ---
+    match_stats_by_gw = {}
+    try:
+        all_pms, all_mat = _get_combined_match_data()
+        if not all_pms.empty:
+            p_rows = all_pms[all_pms["player_id"] == player_id]
+            player_team_code = player_info["team_code"]
+            for _, prow in p_rows.iterrows():
+                gw_num = int(prow["_gw"])
+                mid = prow.get("match_id")
+                m_row = all_mat[(all_mat["match_id"] == mid) & (all_mat["_gw"] == gw_num)]
+                opponent_short = ""
+                is_home = None
+                if not m_row.empty:
+                    mr = m_row.iloc[0]
+                    home_code = int(mr["home_team"]) if pd.notna(mr.get("home_team")) else 0
+                    away_code = int(mr["away_team"]) if pd.notna(mr.get("away_team")) else 0
+                    if player_team_code == home_code:
+                        is_home = True
+                        opp_team = team_code_map.get(away_code, {})
+                        opponent_short = opp_team.get("short_name", "?")
+                    else:
+                        is_home = False
+                        opp_team = team_code_map.get(home_code, {})
+                        opponent_short = opp_team.get("short_name", "?")
+                stat = {
+                    "gw": gw_num,
+                    "opponent_short": opponent_short,
+                    "is_home": is_home,
+                    "minutes_played": _safe_num(prow.get("minutes_played", 0)),
+                    "xg": _safe_num(prow.get("xg", 0), decimals=2),
+                    "xa": _safe_num(prow.get("xa", 0), decimals=2),
+                    "xgot": _safe_num(prow.get("xgot", 0), decimals=2),
+                    "total_shots": _safe_num(prow.get("total_shots", 0)),
+                    "chances_created": _safe_num(prow.get("chances_created", 0)),
+                    "touches_opposition_box": _safe_num(prow.get("touches_opposition_box", 0)),
+                    "tackles_won": _safe_num(prow.get("tackles_won", 0)),
+                    "successful_dribbles": _safe_num(prow.get("successful_dribbles", 0)),
+                    "accurate_crosses": _safe_num(prow.get("accurate_crosses", 0)),
+                    "saves": _safe_num(prow.get("saves", 0)),
+                }
+                match_stats_by_gw.setdefault(gw_num, []).append(stat)
+    except Exception:
+        pass
+
+    # Merge match stats into gw_history entries
+    for entry in gw_history:
+        gw_num = entry["gw"]
+        if gw_num in match_stats_by_gw:
+            stats_list = match_stats_by_gw[gw_num]
+            # Sum across multiple matches (DGW)
+            entry["opponent_short"] = ", ".join(s["opponent_short"] for s in stats_list)
+            entry["is_home"] = stats_list[0]["is_home"] if len(stats_list) == 1 else None
+            for key in ["xg", "xa", "xgot", "total_shots", "chances_created",
+                        "touches_opposition_box", "tackles_won", "successful_dribbles",
+                        "accurate_crosses", "saves"]:
+                entry[key] = round(sum(s[key] for s in stats_list), 2)
+
+    # --- Advanced summary (aggregate match stats) ---
+    total_mins_match = sum(
+        s["minutes_played"]
+        for stats_list in match_stats_by_gw.values()
+        for s in stats_list
+    )
+    advanced_summary = {}
+    if match_stats_by_gw:
+        agg_keys = ["xg", "xa", "xgot", "total_shots", "chances_created",
+                     "touches_opposition_box", "tackles_won", "successful_dribbles",
+                     "accurate_crosses", "saves"]
+        for key in agg_keys:
+            total = sum(s[key] for stats_list in match_stats_by_gw.values() for s in stats_list)
+            advanced_summary[key] = round(total, 2)
+            if total_mins_match > 0:
+                advanced_summary[f"{key}_per90"] = round(total / total_mins_match * 90, 2)
+            else:
+                advanced_summary[f"{key}_per90"] = 0
+
+    # --- Upcoming fixtures ---
+    upcoming = []
+    fixtures_path = CACHE_DIR / "fpl_api_fixtures.json"
+    if fixtures_path.exists():
+        try:
+            fixtures = json.loads(fixtures_path.read_text(encoding="utf-8"))
+            player_team_id = player_info["team_id"]
+            unfinished = [
+                f for f in fixtures
+                if not f.get("finished") and f.get("event")
+                and (f["team_h"] == player_team_id or f["team_a"] == player_team_id)
+            ]
+            unfinished.sort(key=lambda f: f["event"])
+            for f in unfinished[:8]:
+                if f["team_h"] == player_team_id:
+                    opp_team = team_map.get(f["team_a"], {})
+                    is_home = True
+                    fdr = f.get("team_h_difficulty", 3)
+                else:
+                    opp_team = team_map.get(f["team_h"], {})
+                    is_home = False
+                    fdr = f.get("team_a_difficulty", 3)
+                upcoming.append({
+                    "gw": f["event"],
+                    "opponent_short": opp_team.get("short_name", "?"),
+                    "is_home": is_home,
+                    "fdr": fdr,
+                })
+        except Exception:
+            pass
+
+    # --- Predictions (from detail JSON if available, falling back to CSV) ---
+    predictions = {}
+    detail_path = OUTPUT_DIR / "predictions_detail.json"
+    if detail_path.exists():
+        try:
+            detail_data = json.loads(detail_path.read_text(encoding="utf-8"))
+            player_detail = detail_data.get("players", {}).get(str(player_id))
+            if player_detail:
+                predictions = player_detail
+                predictions["latest_gw"] = detail_data.get("latest_gw", 0)
+        except Exception:
+            pass
+    if not predictions:
+        pred_path = OUTPUT_DIR / "predictions.csv"
+        if pred_path.exists():
+            try:
+                pred_df = pd.read_csv(pred_path)
+                p_row = pred_df[pred_df["player_id"] == player_id]
+                if not p_row.empty:
+                    pr = p_row.iloc[0]
+                    predictions = {
+                        "predicted_next_gw_points": _safe_num(pr.get("predicted_next_gw_points", 0), 2),
+                        "captain_score": _safe_num(pr.get("captain_score", 0), 2),
+                        "prediction_low": _safe_num(pr.get("prediction_low", 0), 2),
+                        "prediction_high": _safe_num(pr.get("prediction_high", 0), 2),
+                        "predicted_next_3gw_points": _safe_num(pr.get("predicted_next_3gw_points", 0), 2),
+                    }
+            except Exception:
+                pass
+
+    return jsonify({
+        "player": player_info,
+        "gw_history": gw_history,
+        "advanced_summary": advanced_summary,
+        "upcoming_fixtures": upcoming,
+        "predictions": predictions,
+        "available_gws": available_gws,
+    })
+
+
+def _safe_num(val, decimals=0):
+    """Convert a value to a number, returning 0 for NaN/None."""
+    if val is None or (isinstance(val, float) and np.isnan(val)):
+        return 0
+    if decimals > 0:
+        return round(float(val), decimals)
+    return int(val)
 
 
 # ---------------------------------------------------------------------------

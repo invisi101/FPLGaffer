@@ -242,12 +242,13 @@ def _predict_next_3gw_from_1gw(
     df: pd.DataFrame,
     fixture_context: dict,
     latest_gw: int,
-) -> pd.DataFrame:
+) -> tuple[pd.DataFrame, list[dict]]:
     """Predict next-3-GW points by summing three 1-GW predictions.
 
     For each of the next 3 GWs, builds a snapshot with that GW's opponent data
-    and runs the 1-GW ensemble model.  Returns a DataFrame with player_id and
-    predicted_next_3gw_points (the sum of the three per-GW predictions).
+    and runs the 1-GW ensemble model.  Returns a tuple of:
+      - DataFrame with player_id and predicted_next_3gw_points (the sum)
+      - List of per-GW detail dicts (for predictions_detail.json export)
     """
     fixture_map = fixture_context["fixture_map"]
     fdr_map = fixture_context["fdr_map"]
@@ -255,6 +256,7 @@ def _predict_next_3gw_from_1gw(
     opp_rolling = fixture_context["opp_rolling"]
 
     per_gw_preds = []
+    per_gw_detail = []  # [{gw, player_id, predicted_pts, opponent_code, is_home, fdr}]
 
     for offset in range(1, 4):
         target_gw = latest_gw + offset
@@ -279,8 +281,35 @@ def _predict_next_3gw_from_1gw(
             avg_pts = gw_df[f"pred_gw{target_gw}"].mean()
             print(f"  GW{target_gw}: {n_players} players, avg {avg_pts:.2f} pts")
 
+            # Collect fixture info for each player in this GW
+            fixture_info = snapshot[["player_id", "team_code"]].drop_duplicates(
+                subset=["player_id"], keep="first"
+            )
+            gw_fixtures = fixture_map[fixture_map["gameweek"] == target_gw][
+                ["team_code", "opponent_code", "is_home"]
+            ].drop_duplicates()
+            # Get FDR
+            fdr_gw = fdr_map[fdr_map["gameweek"] == target_gw][
+                ["team_code", "opponent_code", "fdr"]
+            ].drop_duplicates() if not fdr_map.empty else pd.DataFrame()
+            if not fdr_gw.empty:
+                gw_fixtures = gw_fixtures.merge(
+                    fdr_gw, on=["team_code", "opponent_code"], how="left"
+                )
+            else:
+                gw_fixtures["fdr"] = 3
+
+            fixture_info = fixture_info.merge(gw_fixtures, on="team_code", how="left")
+            # Merge predicted points
+            fixture_info = fixture_info.merge(
+                gw_df.rename(columns={f"pred_gw{target_gw}": "predicted_pts"}),
+                on="player_id", how="left"
+            )
+            fixture_info["gw"] = target_gw
+            per_gw_detail.append(fixture_info)
+
     if not per_gw_preds:
-        return pd.DataFrame(columns=["player_id", "predicted_next_3gw_points"])
+        return pd.DataFrame(columns=["player_id", "predicted_next_3gw_points"]), []
 
     # Merge all per-GW predictions and sum
     merged = per_gw_preds[0]
@@ -290,7 +319,7 @@ def _predict_next_3gw_from_1gw(
     pred_cols = [c for c in merged.columns if c.startswith("pred_gw")]
     merged["predicted_next_3gw_points"] = merged[pred_cols].sum(axis=1)
 
-    return merged[["player_id", "predicted_next_3gw_points"]]
+    return merged[["player_id", "predicted_next_3gw_points"]], per_gw_detail
 
 
 def predict_future_gw(
@@ -531,11 +560,32 @@ def run_predictions(df: pd.DataFrame, data: dict | None = None) -> pd.DataFrame:
         interval_df = pd.concat(intervals, ignore_index=True)
         result = result.merge(interval_df, on="player_id", how="left")
 
+    # --- Decomposed component predictions (for detail export) ---
+    component_details = {}
+    for position in POSITION_GROUPS:
+        components = SUB_MODELS_FOR_POSITION.get(position, [])
+        has_sub = all(
+            load_sub_model(position, comp) is not None for comp in components
+        ) if components else False
+        if has_sub:
+            decomp = predict_decomposed(current, position)
+            if not decomp.empty:
+                sub_cols = [c for c in decomp.columns if c.startswith("sub_") or c.startswith("pts_")]
+                keep_cols = ["player_id"] + sub_cols + ["p_plays", "p_60plus"]
+                keep_cols = [c for c in keep_cols if c in decomp.columns]
+                for _, row in decomp[keep_cols].iterrows():
+                    pid = int(row["player_id"])
+                    component_details[pid] = {
+                        c: round(float(row[c]), 4) if pd.notna(row[c]) else 0
+                        for c in keep_cols if c != "player_id"
+                    }
+
     # --- 3-GW predictions: sum three 1-GW predictions with per-GW opponents ---
+    per_gw_detail = []
     if data is not None:
         print("\n  Deriving 3-GW predictions from 1-GW model...")
         fixture_context = get_fixture_context(data)
-        preds_3gw = _predict_next_3gw_from_1gw(
+        preds_3gw, per_gw_detail = _predict_next_3gw_from_1gw(
             current, df, fixture_context, latest_gw,
         )
         if not preds_3gw.empty:
@@ -602,7 +652,81 @@ def run_predictions(df: pd.DataFrame, data: dict | None = None) -> pd.DataFrame:
                 if n_zeroed > 0:
                     print(f"  Zeroed predictions for {n_zeroed} unavailable/doubtful players")
 
+    # Store prediction detail data for export
+    _prediction_detail_store["component_details"] = component_details
+    _prediction_detail_store["per_gw_detail"] = per_gw_detail
+    _prediction_detail_store["latest_gw"] = latest_gw
+
     return result
+
+
+# Module-level store for rich prediction details (populated by run_predictions)
+_prediction_detail_store: dict = {}
+
+
+def save_prediction_details(result: pd.DataFrame, data: dict | None = None) -> None:
+    """Export predictions_detail.json with per-player component and per-GW data.
+
+    Reads from _prediction_detail_store (populated by run_predictions) and
+    the formatted result DataFrame. Overwrites the file each time.
+    """
+    import json
+
+    component_details = _prediction_detail_store.get("component_details", {})
+    per_gw_detail = _prediction_detail_store.get("per_gw_detail", [])
+    latest_gw = _prediction_detail_store.get("latest_gw", 0)
+
+    # Build per-GW lookup: {player_id: [{gw, predicted_pts, opponent_code, is_home, fdr}]}
+    per_gw_by_player: dict[int, list] = {}
+    # Build team_code->short_name map from bootstrap
+    team_code_to_short = {}
+    if data is not None:
+        for t in data.get("api", {}).get("bootstrap", {}).get("teams", []):
+            team_code_to_short[t["code"]] = t["short_name"]
+
+    for gw_df in per_gw_detail:
+        if gw_df.empty:
+            continue
+        for _, row in gw_df.iterrows():
+            pid = int(row["player_id"])
+            opp_code = int(row["opponent_code"]) if pd.notna(row.get("opponent_code")) else 0
+            entry = {
+                "gw": int(row["gw"]),
+                "predicted_pts": round(float(row.get("predicted_pts", 0)), 2),
+                "opponent_short": team_code_to_short.get(opp_code, "?"),
+                "is_home": bool(row["is_home"]) if pd.notna(row.get("is_home")) else None,
+                "fdr": int(row["fdr"]) if pd.notna(row.get("fdr")) else 3,
+            }
+            per_gw_by_player.setdefault(pid, []).append(entry)
+
+    # Build final detail dict keyed by player_id
+    detail = {}
+    for _, row in result.iterrows():
+        pid = int(row["player_id"])
+        entry = {
+            "predicted_next_gw_points": round(float(row.get("predicted_next_gw_points", 0)), 2),
+            "captain_score": round(float(row.get("captain_score", 0)), 2),
+            "prediction_low": round(float(row.get("prediction_low", 0)), 2) if pd.notna(row.get("prediction_low")) else None,
+            "prediction_high": round(float(row.get("prediction_high", 0)), 2) if pd.notna(row.get("prediction_high")) else None,
+            "predicted_next_3gw_points": round(float(row.get("predicted_next_3gw_points", 0)), 2) if pd.notna(row.get("predicted_next_3gw_points")) else None,
+            "q80": round(float(row.get("predicted_next_gw_points_q80", 0)), 2) if pd.notna(row.get("predicted_next_gw_points_q80")) else None,
+        }
+        # Add component breakdown
+        if pid in component_details:
+            entry["components"] = component_details[pid]
+        # Add per-GW predictions
+        if pid in per_gw_by_player:
+            entry["per_gw"] = sorted(per_gw_by_player[pid], key=lambda x: x["gw"])
+
+        detail[str(pid)] = entry
+
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    detail_path = OUTPUT_DIR / "predictions_detail.json"
+    detail_path.write_text(json.dumps({
+        "latest_gw": latest_gw,
+        "players": detail,
+    }, ensure_ascii=False), encoding="utf-8")
+    print(f"  Prediction details saved to {detail_path} ({len(detail)} players)")
 
 
 def format_predictions(preds: pd.DataFrame, df: pd.DataFrame) -> pd.DataFrame:
@@ -769,6 +893,9 @@ def main():
     csv_path = OUTPUT_DIR / "predictions.csv"
     result.to_csv(csv_path, index=False, encoding="utf-8")
     print(f"\nPredictions saved to {csv_path}")
+
+    # Save prediction details JSON
+    save_prediction_details(result, data=data)
 
 
 if __name__ == "__main__":
