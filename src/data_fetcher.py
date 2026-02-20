@@ -236,12 +236,15 @@ def fetch_season_data(season: str, force: bool = False) -> dict[str, pd.DataFram
     data = {}
 
     # Probe: try the first file to check if this season exists on the data source
+    # Bug 99 fix: Use the actual cache file for the probe instead of a duplicate
     if layout == LAYOUT_FLAT:
+        probe_key = list(FLAT_FILES.keys())[0]
         probe_path = list(FLAT_FILES.values())[0]
     else:
+        probe_key = list(PER_GW_ROOT_FILES.keys())[0]
         probe_path = list(PER_GW_ROOT_FILES.values())[0]
     probe_url = f"{GITHUB_BASE}/{season}/{probe_path}"
-    probe_cache = _cache_path(f"{season}_probe.csv")
+    probe_cache = _cache_path(f"{season}_{probe_key}.csv")
     try:
         _fetch_csv(probe_url, probe_cache, force=force)
     except requests.RequestException:

@@ -21,7 +21,7 @@ MODEL_DIR = _BASE / "models"
 OUTPUT_DIR = _BASE / "output"
 _N_JOBS = 1 if getattr(sys, "frozen", False) else -1
 POSITION_GROUPS = ["GKP", "DEF", "MID", "FWD"]
-TARGETS = ["next_gw_points", "next_3gw_points"]
+TARGETS = ["next_gw_points"]  # 3-GW predictions derived from 1-GW models at inference
 
 MIN_TRAIN_GWS = 10
 
@@ -68,12 +68,15 @@ DEFAULT_FEATURES = {
         "transfers_in_event", "net_transfers",
         # Opponent attacking threat
         "opp_big_chances_allowed_last3",
+        # Opponent attacking output (how many goals they score — key for CS prediction)
+        "opp_goals_scored_last3", "opp_xg_last3",
     ],
     "DEF": [
         "player_form", "cost", "gw_player_bps", "is_home", "fdr",
         "opponent_elo", "player_xg_last3", "player_xa_last3",
         "player_chances_created_last3", "player_clearances_last3",
         "player_interceptions_last3", "player_tackles_won_last3",
+        "player_blocks_last3", "player_cbit_last3",
         "opp_goals_conceded_last3", "opp_xg_conceded_last3",
         "cs_opportunity", "player_minutes_played_last3",
         "chance_of_playing", "gw_influence", "gw_threat", "gw_creativity",
@@ -82,8 +85,6 @@ DEFAULT_FEATURES = {
         "avg_fdr_next3", "home_pct_next3", "avg_opponent_elo_next3",
         # Clean sheet and starter data
         "clean_sheets_per_90", "starts_per_90", "xgc_per_90",
-        # Card risk
-        "yellow_cards",
         # Own-team strength
         "team_clean_sheet_last3", "team_goals_scored_last3", "team_xg_last3",
         # Longer windows for key stats
@@ -104,6 +105,8 @@ DEFAULT_FEATURES = {
         "gw_ict_index",
         # Opponent attacking threat
         "opp_big_chances_allowed_last3",
+        # Opponent attacking output (how many goals they score — key for CS prediction)
+        "opp_goals_scored_last3", "opp_xg_last3",
         # Rotation risk
         "availability_rate_last5",
     ],
@@ -123,8 +126,6 @@ DEFAULT_FEATURES = {
         "avg_fdr_next3", "home_pct_next3", "avg_opponent_elo_next3",
         # Starter and transfer data
         "starts_per_90", "transfers_in_event",
-        # Card risk
-        "yellow_cards",
         # Own-team attacking strength
         "team_goals_scored_last3", "team_xg_last3", "team_big_chances_last3",
         # Longer windows for key stats
@@ -147,6 +148,8 @@ DEFAULT_FEATURES = {
         "xg_volatility_last5", "form_acceleration", "big_chance_frequency_last5",
         # Rotation risk
         "availability_rate_last5",
+        # Defensive contributions (DefCon) — CDMs and box-to-box mids earn these
+        "player_cbit_last3", "player_tackles_won_last3", "player_interceptions_last3",
     ],
     "FWD": [
         "player_form", "cost", "gw_player_bps", "is_home", "fdr",
@@ -269,7 +272,7 @@ def train_model(
     position: str,
     target: str,
     feature_cols: list[str] | None = None,
-    tune: bool = True,
+    tune: bool = False,
 ) -> dict:
     """Train an XGBoost model for a position/target combination.
 
@@ -329,11 +332,12 @@ def train_model(
         }
 
     # Walk-forward validation using the selected hyperparameters
+    # Use the LAST 20 splits (most recent GWs) for more representative metrics
     maes = []
     spearmans = []
     all_pred_resid = []  # (prediction, residual) pairs for conditional intervals
-    n_splits = 0
-    for train_mask, test_mask in _walk_forward_splits(pos_df):
+    all_splits = list(_walk_forward_splits(pos_df))
+    for train_mask, test_mask in all_splits[-20:]:
         X_train = pos_df.loc[train_mask, available_feats].values
         y_train = pos_df.loc[train_mask, target].values
         w_train = pos_df.loc[train_mask, "_sample_weight"].values
@@ -356,13 +360,10 @@ def train_model(
                 rho = spearmanr(y_test, preds).correlation
             if not np.isnan(rho):
                 spearmans.append(float(rho))
-        n_splits += 1
-        if n_splits >= 20:
-            break
 
     walk_forward_mae = np.mean(maes) if maes else float("nan")
     avg_spearman = np.mean(spearmans) if spearmans else float("nan")
-    print(f"    Walk-forward MAE: {walk_forward_mae:.3f}, Spearman: {avg_spearman:.3f} (over {n_splits} splits)")
+    print(f"    Walk-forward MAE: {walk_forward_mae:.3f}, Spearman: {avg_spearman:.3f} (over {len(maes)} splits)")
 
     # Residual percentiles for prediction intervals (80% PI)
     # Global fallback
@@ -435,7 +436,7 @@ def train_model(
     }
 
 
-def train_all_models(df: pd.DataFrame, tune: bool = True) -> list[dict]:
+def train_all_models(df: pd.DataFrame, tune: bool = False) -> list[dict]:
     """Train 1-GW models for all positions.
 
     Only trains ``next_gw_points`` models — 3-GW predictions are derived at
@@ -489,17 +490,25 @@ def predict_for_position(
     if not available_feats:
         return pd.DataFrame()
 
+    # Warn if significant features are missing from inference data
+    missing_feats = [c for c in features if c not in pos_df.columns]
+    if missing_feats and len(missing_feats) > len(features) * 0.1:
+        print(f"  WARNING: {position}/{target}{suffix}: {len(missing_feats)}/{len(features)} features missing: {missing_feats[:5]}...")
+
     # Use same semantically correct defaults as training (_prepare_position_data)
     _fill_defaults = {"opponent_elo": 1500.0, "fdr": 3.0, "avg_fdr_next3": 3.0,
-                      "avg_opponent_elo_next3": 1500.0}
+                      "avg_opponent_elo_next3": 1500.0, "home_pct_next3": 0.5}
     for c in available_feats:
         pos_df[c] = pos_df[c].fillna(_fill_defaults.get(c, 0))
 
-    # Handle missing features (pad with zeros)
-    X = np.zeros((len(pos_df), len(features)))
+    # Handle missing features: use NaN so XGBoost follows its learned default
+    # direction at each split, rather than treating 0 as a real value
+    X = np.full((len(pos_df), len(features)), np.nan)
     for i, f in enumerate(features):
         if f in pos_df.columns:
             X[:, i] = pos_df[f].values
+        elif f in _fill_defaults:
+            X[:, i] = _fill_defaults[f]
 
     pred_col = f"predicted_{target}{suffix}"
     pos_df[pred_col] = model.predict(X).clip(min=0)
@@ -645,6 +654,7 @@ SUB_MODEL_COMPONENTS = {
     "bonus": "next_gw_bonus",           # regression: expected bonus (0-3)
     "goals_conceded": "next_gw_goals_conceded",  # regression: expected GC
     "saves": "next_gw_saves",           # regression: expected saves (GKP only)
+    "defcon": "next_gw_cbit",           # count:poisson: expected CBIT → P(defcon) via Poisson CDF
 }
 
 # XGBoost objective per sub-model component.
@@ -656,14 +666,15 @@ SUB_MODEL_OBJECTIVES = {
     "bonus": "count:poisson",
     "goals_conceded": "count:poisson",
     "saves": "count:poisson",
+    "defcon": "count:poisson",
 }
 
 # FPL scoring multipliers by position
 FPL_SCORING = {
-    "GKP": {"appearance": 2, "goal": 10, "assist": 3, "cs": 4, "gc_per_2": -1, "save_per_3": 1},
-    "DEF": {"appearance": 2, "goal": 6, "assist": 3, "cs": 4, "gc_per_2": -1, "save_per_3": 0},
-    "MID": {"appearance": 2, "goal": 5, "assist": 3, "cs": 1, "gc_per_2": 0, "save_per_3": 0},
-    "FWD": {"appearance": 2, "goal": 4, "assist": 3, "cs": 0, "gc_per_2": 0, "save_per_3": 0},
+    "GKP": {"appearance": 2, "goal": 10, "assist": 3, "cs": 4, "gc_per_2": -1, "save_per_3": 1, "defcon": 2, "defcon_threshold": 10},
+    "DEF": {"appearance": 2, "goal": 6, "assist": 3, "cs": 4, "gc_per_2": -1, "save_per_3": 0, "defcon": 2, "defcon_threshold": 10},
+    "MID": {"appearance": 2, "goal": 5, "assist": 3, "cs": 1, "gc_per_2": 0, "save_per_3": 0, "defcon": 2, "defcon_threshold": 12},
+    "FWD": {"appearance": 2, "goal": 4, "assist": 3, "cs": 0, "gc_per_2": 0, "save_per_3": 0, "defcon": 0, "defcon_threshold": 12},
 }
 
 # Feature sets tailored to each sub-model — smaller and more focused than the
@@ -703,6 +714,8 @@ SUB_MODEL_FEATURES = {
         # Opponent history
         "vs_opponent_goals_avg", "vs_opponent_xg_avg", "vs_opponent_matches",
         "opp_big_chances_allowed_last3",
+        # Opponent attacking output (the most direct CS signal)
+        "opp_goals_scored_last3", "opp_xg_last3",
     ],
     "bonus": [
         "gw_player_bps", "gw_ict_index", "gw_influence", "gw_threat", "gw_creativity",
@@ -730,13 +743,28 @@ SUB_MODEL_FEATURES = {
         "vs_opponent_goals_avg", "vs_opponent_xg_avg", "vs_opponent_matches",
         "opp_big_chances_allowed_last3",
     ],
+    "defcon": [
+        # Composite CBIT and individual defensive action features
+        "player_cbit_last3", "player_cbit_last5",
+        "player_clearances_last3", "player_blocks_last3",
+        "player_interceptions_last3", "player_tackles_won_last3",
+        "player_aerial_duels_won_last3",
+        # Context: home teams tend to see more defensive actions for away players
+        "is_home", "fdr", "opponent_elo",
+        # Opponent attacking strength (more opp attacks = more CBIT opportunities)
+        "opp_goals_scored_last3", "opp_xg_last3",
+        "opp_big_chances_allowed_last3",
+        # Playing time (must play to earn defcon)
+        "player_minutes_played_last3", "starts_per_90",
+        "next_gw_fixture_count",
+    ],
 }
 
 # Which sub-models to train for each position
 SUB_MODELS_FOR_POSITION = {
     "GKP": ["cs", "goals_conceded", "saves", "bonus"],
-    "DEF": ["goals", "assists", "cs", "goals_conceded", "bonus"],
-    "MID": ["goals", "assists", "cs", "bonus"],
+    "DEF": ["goals", "assists", "cs", "goals_conceded", "bonus", "defcon"],
+    "MID": ["goals", "assists", "cs", "bonus", "defcon"],
     "FWD": ["goals", "assists", "bonus"],
 }
 
@@ -928,15 +956,17 @@ def predict_decomposed(
 
         _fill_defaults = {
             "opponent_elo": 1500.0, "fdr": 3.0, "avg_fdr_next3": 3.0,
-            "avg_opponent_elo_next3": 1500.0,
+            "avg_opponent_elo_next3": 1500.0, "home_pct_next3": 0.5,
         }
         for c in available:
             pos_df[c] = pos_df[c].fillna(_fill_defaults.get(c, 0))
 
-        X = np.zeros((len(pos_df), len(features)))
+        X = np.full((len(pos_df), len(features)), np.nan)
         for i, f in enumerate(features):
             if f in pos_df.columns:
                 X[:, i] = pos_df[f].values
+            elif f in _fill_defaults:
+                X[:, i] = _fill_defaults[f]
 
         pos_df[f"sub_{comp}"] = model.predict(X).clip(min=0)
         component_preds[comp] = True
@@ -1008,6 +1038,18 @@ def predict_decomposed(
     else:
         pos_df["pts_bonus"] = 0.0
 
+    # Defensive contributions (DefCon): +2 pts if CBIT >= threshold
+    # sub_defcon predicts expected CBIT count; convert to P(defcon) via Poisson CDF
+    if "sub_defcon" in pos_df.columns and scoring.get("defcon", 0) > 0:
+        from scipy.stats import poisson
+        threshold = scoring.get("defcon_threshold", 10)
+        expected_cbit = pos_df["sub_defcon"].clip(lower=0.01)
+        # P(CBIT >= threshold) = 1 - P(CBIT < threshold) = 1 - CDF(threshold - 1)
+        p_defcon = 1.0 - poisson.cdf(threshold - 1, mu=expected_cbit)
+        pos_df["pts_defcon"] = pos_df["p_plays"] * p_defcon * scoring["defcon"]
+    else:
+        pos_df["pts_defcon"] = 0.0
+
     # Total: gate everything (except maybe bonus) by P(plays)
     pos_df["predicted_next_gw_points"] = (
         pos_df["pts_appearance"]
@@ -1017,6 +1059,7 @@ def predict_decomposed(
         + pos_df["pts_gc"]
         + pos_df["pts_saves"]
         + pos_df["pts_bonus"]
+        + pos_df["pts_defcon"]
     ).clip(lower=0)
 
     # Soft calibration cap: when component predictions stack up (especially for
@@ -1033,13 +1076,15 @@ def predict_decomposed(
     # DGW: sum per-fixture predictions
     if pos_df.duplicated(subset=["player_id"], keep=False).any():
         pred_col = "predicted_next_gw_points"
-        agg_pred = pos_df.groupby("player_id")[pred_col].sum()
-        # Also sum component predictions for diagnostics
+        # Sum component predictions alongside the final prediction
         sub_cols = [c for c in pos_df.columns if c.startswith("sub_") or c.startswith("pts_")]
-        meta_cols = [c for c in pos_df.columns if c not in sub_cols + [pred_col]]
+        sum_cols = [pred_col] + sub_cols
+        agg = pos_df.groupby("player_id")[sum_cols].sum()
+        meta_cols = [c for c in pos_df.columns if c not in sum_cols]
         deduped = pos_df[meta_cols].drop_duplicates(subset=["player_id"], keep="first")
         deduped = deduped.set_index("player_id")
-        deduped[pred_col] = agg_pred
+        for c in sum_cols:
+            deduped[c] = agg[c]
         pos_df = deduped.reset_index()
 
     return pos_df

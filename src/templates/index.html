@@ -957,6 +957,180 @@
     margin-right: 4px;
   }
 
+  /* Monsters panel */
+  .monsters-panel { display: none; }
+  .monsters-panel.visible { display: block; }
+
+  .monsters-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+    gap: 20px;
+  }
+
+  .monster-category {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  .monster-category-header {
+    padding: 14px 18px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface2);
+  }
+
+  .monster-category-header .cat-emoji {
+    font-size: 24px;
+  }
+
+  .monster-category-header .cat-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text);
+  }
+
+  .monster-category-header .cat-subtitle {
+    font-size: 11px;
+    color: var(--text2);
+    margin-left: auto;
+    font-style: italic;
+  }
+
+  .monster-podium {
+    display: flex;
+    gap: 6px;
+    padding: 14px;
+    justify-content: center;
+    align-items: flex-end;
+  }
+
+  .monster-card {
+    flex: 1;
+    max-width: 140px;
+    text-align: center;
+    background: var(--bg);
+    border-radius: 10px;
+    padding: 10px 6px 12px;
+    position: relative;
+    transition: transform 0.2s, box-shadow 0.2s;
+    border: 1px solid transparent;
+  }
+
+  .monster-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+  }
+
+  .monster-card.rank-1 {
+    border-color: #fbbf24;
+    box-shadow: 0 0 16px rgba(251,191,36,0.15);
+    order: 2;
+    transform: translateY(-8px);
+  }
+  .monster-card.rank-1:hover { transform: translateY(-12px); }
+  .monster-card.rank-2 { order: 1; }
+  .monster-card.rank-3 { order: 3; }
+
+  .monster-rank-badge {
+    position: absolute;
+    top: -8px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    font-size: 11px;
+    font-weight: 800;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 2;
+  }
+
+  .rank-1 .monster-rank-badge { background: #fbbf24; color: #1a1a1a; }
+  .rank-2 .monster-rank-badge { background: #94a3b8; color: #1a1a1a; }
+  .rank-3 .monster-rank-badge { background: #cd7f32; color: #1a1a1a; }
+
+  .monster-photo {
+    width: 72px;
+    height: 90px;
+    object-fit: cover;
+    object-position: top;
+    border-radius: 6px;
+    margin: 8px auto 6px;
+    display: block;
+    background: var(--surface2);
+  }
+
+  .monster-name {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .monster-team-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    margin: 2px 0;
+  }
+
+  .monster-team-badge {
+    width: 14px;
+    height: 14px;
+  }
+
+  .monster-team-name {
+    font-size: 10px;
+    color: var(--text2);
+  }
+
+  .monster-pos-tag {
+    display: inline-block;
+    font-size: 9px;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 3px;
+    margin: 3px 0;
+  }
+  .monster-pos-tag.GKP { background: #f59e0b33; color: #f59e0b; }
+  .monster-pos-tag.DEF { background: #22c55e33; color: #22c55e; }
+  .monster-pos-tag.MID { background: #3b82f633; color: #3b82f6; }
+  .monster-pos-tag.FWD { background: #ef444433; color: #ef4444; }
+
+  .monster-stat {
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px solid var(--border);
+  }
+
+  .monster-stat-value {
+    font-size: 18px;
+    font-weight: 800;
+    color: var(--green);
+  }
+
+  .monster-stat-label {
+    font-size: 9px;
+    color: var(--text2);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .monster-pts {
+    font-size: 10px;
+    color: var(--accent2);
+    margin-top: 2px;
+  }
+
   /* Season panel */
   .season-panel { display: none; }
   .season-panel.visible { display: block; }
@@ -1477,6 +1651,7 @@
   <div class="tab" data-view="gwscores" onclick="switchTab(this)">⚽ GW Scores</div>
   <div class="tab" data-view="teamform" onclick="switchTab(this)">📈 Form</div>
   <div class="tab" data-view="players" onclick="switchTab(this)">🔮 Players</div>
+  <div class="tab" data-view="monsters" onclick="switchTab(this)">👹 Monsters</div>
   <div class="tab" data-view="season" onclick="switchTab(this)">📅 Season</div>
 </div>
 
@@ -1645,6 +1820,13 @@
   </div>
   <div id="playersContent">
     <div class="empty-state"><h3>Players</h3><p>Loading...</p></div>
+  </div>
+</div>
+
+<!-- Monsters Panel -->
+<div class="content monsters-panel" id="monstersPanel">
+  <div id="monstersContent">
+    <div class="empty-state"><h3>Loading Monsters...</h3><p>Identifying the most dangerous players in the game.</p></div>
   </div>
 </div>
 
@@ -2521,6 +2703,14 @@ function switchTab(tab) {
     loadPlayersTeams();
   } else {
     playersPanel.classList.remove('visible');
+  }
+
+  const monstersPanel = document.getElementById('monstersPanel');
+  if (view === 'monsters') {
+    monstersPanel.classList.add('visible');
+    loadMonsters();
+  } else {
+    monstersPanel.classList.remove('visible');
   }
 
   const seasonPanel = document.getElementById('seasonPanel');
@@ -5580,6 +5770,102 @@ if (savedManagerId) {
 // --- Help Overlay ---
 function openHelp() { document.getElementById('helpOverlay').style.display = 'flex'; }
 function closeHelp() { document.getElementById('helpOverlay').style.display = 'none'; }
+
+// ---------------------------------------------------------------------------
+// Monsters Tab
+// ---------------------------------------------------------------------------
+const WALDO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 110 140" width="110" height="140">
+  <rect width="110" height="140" fill="#1a1a2e"/>
+  <circle cx="55" cy="52" r="22" fill="#ffe0bd"/>
+  <rect x="30" y="20" rx="12" ry="8" width="50" height="24" fill="#cc0000"/>
+  <rect x="30" y="24" width="50" height="4" fill="white"/>
+  <rect x="30" y="32" width="50" height="4" fill="white"/>
+  <circle cx="55" cy="10" r="6" fill="#cc0000"/>
+  <circle cx="46" cy="50" r="6" stroke="#333" stroke-width="2" fill="none"/>
+  <circle cx="64" cy="50" r="6" stroke="#333" stroke-width="2" fill="none"/>
+  <line x1="52" y1="50" x2="58" y2="50" stroke="#333" stroke-width="2"/>
+  <line x1="34" y1="50" x2="40" y2="50" stroke="#333" stroke-width="2"/>
+  <line x1="70" y1="50" x2="76" y2="50" stroke="#333" stroke-width="2"/>
+  <path d="M48 62 Q55 68 62 62" stroke="#333" stroke-width="1.5" fill="none"/>
+  <rect x="35" y="74" width="40" height="50" rx="4" fill="#cc0000"/>
+  <rect x="35" y="78" width="40" height="5" fill="white"/>
+  <rect x="35" y="88" width="40" height="5" fill="white"/>
+  <rect x="35" y="98" width="40" height="5" fill="white"/>
+  <rect x="35" y="108" width="40" height="5" fill="white"/>
+  <text x="55" y="134" text-anchor="middle" font-size="10" fill="#888" font-family="sans-serif">Where am I?</text>
+</svg>`;
+let _monstersLoaded = false;
+
+function loadMonsters() {
+  if (_monstersLoaded) return;
+  const container = document.getElementById('monstersContent');
+  container.innerHTML = '<div class="empty-state"><h3>Loading Monsters...</h3></div>';
+
+  fetch('/api/monsters').then(r => r.json()).then(d => {
+    if (d.error) {
+      container.innerHTML = `<div class="empty-state"><h3>No Monsters Yet</h3><p>${d.error}</p></div>`;
+      return;
+    }
+    _monstersLoaded = true;
+    renderMonsters(d.categories);
+  }).catch(err => {
+    container.innerHTML = `<div class="empty-state"><h3>Error</h3><p>${err.message}</p></div>`;
+  });
+}
+
+function renderMonsters(categories) {
+  const container = document.getElementById('monstersContent');
+  let html = '<div class="monsters-grid">';
+
+  categories.forEach(cat => {
+    html += `<div class="monster-category">
+      <div class="monster-category-header">
+        <span class="cat-emoji">${cat.emoji}</span>
+        <span class="cat-title">${cat.title}</span>
+        <span class="cat-subtitle">${cat.subtitle}</span>
+      </div>
+      <div class="monster-podium">`;
+
+    cat.players.forEach((p, i) => {
+      const rank = i + 1;
+      const photoUrl = p.photo_code
+        ? `https://resources.premierleague.com/premierleague/photos/players/110x140/p${p.photo_code}.png`
+        : '';
+      const badgeUrl = p.team_code
+        ? `https://resources.premierleague.com/premierleague/badges/25/t${p.team_code}.png`
+        : '';
+
+      // Format stat value
+      let statDisplay = p.stat_value;
+      if (typeof statDisplay === 'number') {
+        statDisplay = statDisplay >= 10 ? Math.round(statDisplay) : statDisplay.toFixed(2);
+      }
+
+      html += `<div class="monster-card rank-${rank}">
+        <div class="monster-rank-badge">${rank}</div>
+        <img class="monster-photo" src="${photoUrl}"
+             onerror="this.src='data:image/svg+xml,${encodeURIComponent(WALDO_SVG)}'"
+             alt="${p.web_name}">
+        <div class="monster-name">${p.web_name}</div>
+        <div class="monster-team-row">
+          ${badgeUrl ? `<img class="monster-team-badge" src="${badgeUrl}" alt="">` : ''}
+          <span class="monster-team-name">${p.team_short} &middot; ${p.cost}m</span>
+        </div>
+        <span class="monster-pos-tag ${p.position}">${p.position}</span>
+        <div class="monster-stat">
+          <div class="monster-stat-value">${statDisplay}</div>
+          <div class="monster-stat-label">${p.stat_label}</div>
+        </div>
+        <div class="monster-pts">${p.total_pts} pts</div>
+      </div>`;
+    });
+
+    html += '</div></div>';
+  });
+
+  html += '</div>';
+  container.innerHTML = html;
+}
 </script>
 
 <!-- Help Overlay -->

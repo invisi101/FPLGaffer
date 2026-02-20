@@ -45,6 +45,14 @@ def _build_player_rolling_features(pms: pd.DataFrame) -> pd.DataFrame:
     agg = pms.groupby(["player_id", "gameweek"])[available_cols].sum().reset_index()
     agg = agg.sort_values(["player_id", "gameweek"])
 
+    # Add composite CBIT (clearances + blocks + interceptions + tackles_won)
+    # for defensive contribution (DefCon) prediction
+    _cbit_cols = ["clearances", "blocks", "interceptions", "tackles_won"]
+    _cbit_available = [c for c in _cbit_cols if c in agg.columns]
+    if _cbit_available:
+        agg["cbit"] = agg[_cbit_available].sum(axis=1)
+        available_cols = available_cols + ["cbit"]
+
     # Compute rolling averages (shift by 1 to avoid leakage — only past data)
     result_frames = [agg[["player_id", "gameweek"]]]
     for window in PLAYER_ROLLING_WINDOWS:
@@ -214,6 +222,8 @@ def _build_opponent_rolling_features(team_stats: pd.DataFrame) -> pd.DataFrame:
         "shots_inside_box_allowed", "accurate_crosses_allowed",
         "clean_sheet", "opponent_xg", "opponent_big_chances",
         "opponent_shots_on_target",
+        # Opponent attacking output — directly predicts CS probability
+        "goals_scored", "xg",
     ]
 
     # Aggregate per team per GW (handles DGW — sum for full GW output)
@@ -441,31 +451,33 @@ def _build_rest_days_features(matches: pd.DataFrame) -> pd.DataFrame:
     m["kickoff_dt"] = pd.to_datetime(m["kickoff_time"], errors="coerce")
     m = m.dropna(subset=["kickoff_dt", "gameweek"])
 
-    # Build per-team rows from both home and away perspectives
+    # Build per-team rows from both home and away perspectives.
+    # Include opponent_code so DGW rest can be merged per-fixture.
     rows = []
     for _, row in m.iterrows():
         gw = int(row["gameweek"])
         dt = row["kickoff_dt"]
         home = row.get("home_team")
         away = row.get("away_team")
-        if pd.notna(home):
-            rows.append({"team_code": int(home), "gameweek": gw, "kickoff_dt": dt})
-        if pd.notna(away):
-            rows.append({"team_code": int(away), "gameweek": gw, "kickoff_dt": dt})
+        if pd.notna(home) and pd.notna(away):
+            rows.append({"team_code": int(home), "gameweek": gw, "kickoff_dt": dt, "opponent_code": int(away)})
+            rows.append({"team_code": int(away), "gameweek": gw, "kickoff_dt": dt, "opponent_code": int(home)})
+        elif pd.notna(home):
+            rows.append({"team_code": int(home), "gameweek": gw, "kickoff_dt": dt, "opponent_code": -1})
+        elif pd.notna(away):
+            rows.append({"team_code": int(away), "gameweek": gw, "kickoff_dt": dt, "opponent_code": -1})
 
     if not rows:
         return pd.DataFrame(columns=["team_code", "gameweek"])
 
     team_matches = pd.DataFrame(rows)
-    # For DGWs, take the latest kickoff per team per GW
-    team_matches = (
-        team_matches.groupby(["team_code", "gameweek"])["kickoff_dt"]
-        .max()
-        .reset_index()
-        .sort_values(["team_code", "kickoff_dt"])
-    )
 
-    # Days since previous match (shifted: value at GW N = rest before GW N)
+    # FE-3 fix: Keep per-match rows so DGW fixtures get individual rest values.
+    # Previously .max() collapsed DGW matches into one row per GW, giving both
+    # fixtures the same (overstated) rest based on the later kickoff only.
+    team_matches = team_matches.sort_values(["team_code", "kickoff_dt"])
+
+    # Days since previous match (per-match, not per-GW)
     team_matches["days_rest"] = (
         team_matches.groupby("team_code")["kickoff_dt"]
         .diff()
@@ -473,13 +485,13 @@ def _build_rest_days_features(matches: pd.DataFrame) -> pd.DataFrame:
     )
     team_matches["days_rest"] = team_matches["days_rest"].fillna(7.0)
 
-    # Fixture congestion = inverse of rolling 3-match average rest
+    # Fixture congestion = inverse of rolling 3-match average rest (per-match)
     team_matches["fixture_congestion"] = (
         team_matches.groupby("team_code")["days_rest"]
         .transform(lambda s: 1.0 / s.rolling(3, min_periods=1).mean())
     )
 
-    return team_matches[["team_code", "gameweek", "days_rest", "fixture_congestion"]]
+    return team_matches[["team_code", "gameweek", "opponent_code", "days_rest", "fixture_congestion"]]
 
 
 def _build_fixture_map(matches: pd.DataFrame) -> pd.DataFrame:
@@ -653,6 +665,15 @@ def _build_decomposed_targets(
         "minutes_played": "gw_minutes",
         "saves": "gw_saves",
     }
+    # Add CBIT (defensive contributions) to PMS columns
+    _cbit_cols = ["clearances", "blocks", "interceptions", "tackles_won"]
+    _cbit_available = [c for c in _cbit_cols if c in pms.columns]
+    if _cbit_available:
+        for c in _cbit_available:
+            pms[c] = pd.to_numeric(pms[c], errors="coerce").fillna(0)
+        pms["cbit"] = pms[_cbit_available].sum(axis=1)
+        pms_cols["cbit"] = "gw_cbit"
+
     available_pms = {k: v for k, v in pms_cols.items() if k in pms.columns}
 
     if available_pms and "gameweek" in pms.columns:
@@ -1166,15 +1187,32 @@ def build_features(data: dict) -> pd.DataFrame:
         # Add own-team rolling features (team attacking/defensive strength)
         if not own_team_rolling.empty:
             df = df.merge(own_team_rolling, on=["team_code", "gameweek"], how="left")
+            # Bug 103 fix: Forward-fill own-team rolling features within each team
+            # (consistent with opponent rolling ffill at line 1164 and player rolling)
+            own_team_cols = [c for c in own_team_rolling.columns
+                            if c.startswith("team_") and c != "team_code"]
+            if own_team_cols:
+                df = df.sort_values(["team_code", "gameweek"])
+                df[own_team_cols] = df.groupby("team_code")[own_team_cols].ffill()
 
         # Add rest days / fixture congestion
         # Shift gameweek by -1: rest_days at GW N = rest before GW N, but the
         # feature row at GW N predicts GW N+1, so we need rest before GW N+1.
         # Shifting maps rest_days(GW N+1) onto feature row(GW N).
+        # FE-3 fix: rest_days now has per-match rows for DGWs with opponent_code.
+        # Merge on opponent_code so each DGW fixture gets its own rest value.
         if not rest_days.empty:
             rest_shifted = rest_days.copy()
             rest_shifted["gameweek"] = rest_shifted["gameweek"] - 1
-            df = df.merge(rest_shifted, on=["team_code", "gameweek"], how="left")
+
+            merge_keys = ["team_code", "gameweek"]
+            if "opponent_code" in df.columns:
+                merge_keys.append("opponent_code")
+
+            df = df.merge(
+                rest_shifted[merge_keys + ["days_rest", "fixture_congestion"]],
+                on=merge_keys, how="left"
+            )
             df["days_rest"] = df["days_rest"].fillna(7.0)
             df["fixture_congestion"] = df["fixture_congestion"].fillna(1.0 / 7.0)
 
@@ -1261,8 +1299,11 @@ def build_features(data: dict) -> pd.DataFrame:
             df["xg_x_opp_goals_conceded"] = df["player_xg_last3"] * df["opp_goals_conceded_last3"]
         if "player_chances_created_last3" in df.columns and "opp_big_chances_allowed_last3" in df.columns:
             df["chances_x_opp_big_chances"] = df["player_chances_created_last3"] * df["opp_big_chances_allowed_last3"]
-        if "opp_opponent_xg_last3" in df.columns:
-            # Lower opponent xG = better for clean sheets
+        # cs_opportunity: inverse of opponent's attacking xG (low opp attack = high CS chance)
+        # Prefer opp_xg_last3 (direct attacking output) over opp_opponent_xg_last3 (xG conceded)
+        if "opp_xg_last3" in df.columns:
+            df["cs_opportunity"] = 1.0 / (df["opp_xg_last3"] + 0.1)
+        elif "opp_opponent_xg_last3" in df.columns:
             df["cs_opportunity"] = 1.0 / (df["opp_opponent_xg_last3"] + 0.1)
 
         # --- Position one-hot encoding ---
@@ -1313,14 +1354,24 @@ def build_features(data: dict) -> pd.DataFrame:
                 carried = was_nan & is_filled
 
                 if carried.any():
-                    # For each row, get the global_gw of the last real (non-NaN) value
-                    last_real_gw = group_df.groupby(group_col)["_global_gw"].transform(
+                    # FE-4 fix: Only apply decay to CROSS-SEASON carry-over.
+                    # Within-season NaN fills (e.g., player missed a GW mid-season)
+                    # should get pure ffill without decay.
+                    last_real_season = group_df.groupby(group_col)["season"].transform(
                         lambda s: s.where(group_df.loc[s.index, col].notna()).ffill()
                     )
-                    distance = group_df["_global_gw"] - last_real_gw
-                    decay = CROSS_SEASON_DECAY ** distance.clip(lower=0)
-                    # Only apply decay to carried-over values, keep real values intact
-                    group_df[col] = np.where(carried, filled * decay, filled)
+                    cross_season = carried & (group_df["season"] != last_real_season)
+
+                    if cross_season.any():
+                        last_real_gw = group_df.groupby(group_col)["_global_gw"].transform(
+                            lambda s: s.where(group_df.loc[s.index, col].notna()).ffill()
+                        )
+                        distance = group_df["_global_gw"] - last_real_gw
+                        decay = CROSS_SEASON_DECAY ** distance.clip(lower=0)
+                        # Decay only cross-season fills; within-season fills get pure ffill
+                        group_df[col] = np.where(cross_season, filled * decay, filled)
+                    else:
+                        group_df[col] = filled
                 else:
                     group_df[col] = filled
 
@@ -1375,6 +1426,10 @@ def build_features(data: dict) -> pd.DataFrame:
         # Forward-fill transfer momentum across seasons
         if "transfer_momentum" in combined.columns:
             combined = _ffill_with_decay(combined, ["transfer_momentum"], "player_id")
+
+        # Forward-fill availability rate across seasons
+        if "availability_rate_last5" in combined.columns:
+            combined = _ffill_with_decay(combined, ["availability_rate_last5"], "player_id")
 
     # Drop rows with no target (last few GWs of season)
     print(f"  Total rows before target filter: {len(combined)}")
@@ -1485,6 +1540,7 @@ def get_feature_columns(df: pd.DataFrame) -> list[str]:
         # Decomposed targets (future data — must not be used as features)
         "next_gw_minutes", "next_gw_goals", "next_gw_assists", "next_gw_cs",
         "next_gw_bonus", "next_gw_goals_conceded", "next_gw_saves",
+        "next_gw_cbit",
     }
     # Also exclude set piece order raw columns (we use the binary flag)
     exclude.update({"penalties_order", "corners_order", "freekicks_order",
@@ -1492,6 +1548,8 @@ def get_feature_columns(df: pd.DataFrame) -> list[str]:
     # Bug 45 fix: exclude cumulative season totals (proxies for total_points)
     exclude.update({"influence", "creativity", "threat", "ict_index",
                      "player_bps", "player_bonus"})
+    # yellow_cards is a cumulative season total, not a per-GW stat
+    exclude.add("yellow_cards")
 
     feature_cols = [c for c in df.columns if c not in exclude and pd.api.types.is_numeric_dtype(df[c])]
     return sorted(feature_cols)

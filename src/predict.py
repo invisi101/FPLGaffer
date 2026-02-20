@@ -195,12 +195,18 @@ def _build_offset_snapshot(
 ENSEMBLE_WEIGHT_DECOMPOSED = 0.5
 
 
-def _ensemble_predict_position(snapshot: pd.DataFrame, position: str) -> pd.DataFrame:
+def _ensemble_predict_position(
+    snapshot: pd.DataFrame, position: str,
+    decomp_cache: dict | None = None,
+) -> pd.DataFrame:
     """Predict for a position using the 50/50 ensemble blend.
 
     Blends decomposed sub-models with mean regression when both available.
     Falls back to whichever exists alone.  Returns DataFrame with at least
     player_id and predicted_next_gw_points columns, or empty DataFrame.
+
+    If decomp_cache dict is provided, stores the full decomposed prediction
+    DataFrame under key=position to avoid redundant recomputation.
     """
     pred_col = "predicted_next_gw_points"
 
@@ -210,6 +216,8 @@ def _ensemble_predict_position(snapshot: pd.DataFrame, position: str) -> pd.Data
     ) if components else False
 
     decomp_preds = predict_decomposed(snapshot, position) if has_sub else pd.DataFrame()
+    if decomp_cache is not None and not decomp_preds.empty:
+        decomp_cache[position] = decomp_preds
 
     model_dict = load_model(position, "next_gw_points")
     mean_preds = (
@@ -507,11 +515,12 @@ def run_predictions(df: pd.DataFrame, data: dict | None = None) -> pd.DataFrame:
     # Ensemble: blend decomposed sub-models with mean regression model (50/50)
     # when both are available. Fall back to whichever exists alone.
     all_preds = []
+    _decomp_cache: dict[str, pd.DataFrame] = {}
     for position in POSITION_GROUPS:
         pred_col = "predicted_next_gw_points"
         keep = ["player_id", "position_clean", pred_col]
 
-        preds = _ensemble_predict_position(current, position)
+        preds = _ensemble_predict_position(current, position, decomp_cache=_decomp_cache)
         if not preds.empty:
             if "web_name" in preds.columns and "web_name" not in keep:
                 keep.insert(1, "web_name")
@@ -561,15 +570,11 @@ def run_predictions(df: pd.DataFrame, data: dict | None = None) -> pd.DataFrame:
         result = result.merge(interval_df, on="player_id", how="left")
 
     # --- Decomposed component predictions (for detail export) ---
+    # Reuse cached results from _ensemble_predict_position to avoid double call
     component_details = {}
     for position in POSITION_GROUPS:
-        components = SUB_MODELS_FOR_POSITION.get(position, [])
-        has_sub = all(
-            load_sub_model(position, comp) is not None for comp in components
-        ) if components else False
-        if has_sub:
-            decomp = predict_decomposed(current, position)
-            if not decomp.empty:
+        decomp = _decomp_cache.get(position, pd.DataFrame())
+        if not decomp.empty:
                 sub_cols = [c for c in decomp.columns if c.startswith("sub_") or c.startswith("pts_")]
                 keep_cols = ["player_id"] + sub_cols + ["p_plays", "p_60plus"]
                 keep_cols = [c for c in keep_cols if c in decomp.columns]
@@ -645,7 +650,8 @@ def run_predictions(df: pd.DataFrame, data: dict | None = None) -> pd.DataFrame:
                 n_zeroed = mask.sum()
                 pred_cols = [
                     c for c in result.columns
-                    if c.startswith("predicted_") or c in ("captain_score",)
+                    if c.startswith("predicted_") or c.startswith("prediction_")
+                    or c in ("captain_score",)
                 ]
                 for col in pred_cols:
                     result.loc[mask, col] = 0.0

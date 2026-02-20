@@ -1061,7 +1061,12 @@ class SeasonManager:
             rec_transfers = json.loads(rec.get("transfers_json") or "[]")
             rec_in_ids = {t["in"]["player_id"] for t in rec_transfers if t.get("in", {}).get("player_id")}
             actual_squad_ids = {p["player_id"] for p in squad}
-            followed_transfers = 1 if rec_in_ids.issubset(actual_squad_ids) else 0
+            # Bug 87 fix: When recommendation was to bank FT (0 transfers),
+            # only count as followed if user also made 0 transfers
+            if not rec_in_ids:
+                followed_transfers = 1 if not gw_transfers else 0
+            else:
+                followed_transfers = 1 if rec_in_ids.issubset(actual_squad_ids) else 0
 
             # WC/FH squad comparison: compare full recommended squad to actual
             rec_chip = rec.get("chip_suggestion") if rec else None
@@ -1650,7 +1655,8 @@ class SeasonManager:
 
         starters = [p for p in squad if p["starter"]]
         if starters:
-            cap_key = captain_key if any(p.get(captain_key) for p in starters) else pred_key
+            # Bug 89 fix: Use `is not None` instead of truthiness (0.0 is a valid captain_score)
+            cap_key = captain_key if any(p.get(captain_key) is not None for p in starters) else pred_key
             starters.sort(key=lambda p: (p.get(cap_key) or 0), reverse=True)
             starters[0]["is_captain"] = True
             if len(starters) > 1:
@@ -1760,7 +1766,12 @@ class SeasonManager:
 
         if "3xc" in available:
             # Triple Captain: extra captain points (highest predicted * 1)
-            best_pred = squad_preds[target_col].max()
+            # Bug 86 fix: TC can only be used on a starter — pick from formation-valid XI
+            if "position" in _temp.columns and bench_preds is not None:
+                best_pred = xi[target_col].max() if target_col in xi.columns else xi["predicted_points"].max()
+            else:
+                top11 = squad_preds.nlargest(min(11, len(squad_preds)), target_col)
+                best_pred = top11[target_col].max()
             # DGW boost for TC too
             dgw_boost = 1.0 + current_gw_dgw_count * 0.1
             chip_values["3xc"] = round(best_pred * dgw_boost, 1)
@@ -1816,10 +1827,20 @@ class SeasonManager:
         current_pred = pool[pool["player_id"].isin(current_squad_ids)]
         # Sum best available players (up to 11) rather than requiring exactly 11
         current_xi_pts = current_pred.nlargest(min(11, len(current_pred)), gw_col)[gw_col].sum() if not current_pred.empty else 0
+        # Bug 88 fix: Add captain bonus to baseline for fair comparison
+        if not current_pred.empty and len(current_pred) >= 1:
+            cap_score_col = "captain_score" if "captain_score" in current_pred.columns else gw_col
+            top11 = current_pred.nlargest(min(11, len(current_pred)), gw_col)
+            if not top11.empty:
+                best_cap_idx = top11[cap_score_col].idxmax()
+                current_xi_pts += top11.loc[best_cap_idx, gw_col]
 
         # Simulate each strategy: use 0..min(ft, 3) FTs this week
         max_use = min(free_transfers, 3)
         strategies = []
+
+        # Bug 88 fix: Pass captain_col for captain-aware optimization
+        cap_col = "captain_score" if "captain_score" in pool.columns else None
 
         for use_now in range(0, max_use + 1):
             # Week 1: solve with use_now transfers
@@ -1831,6 +1852,7 @@ class SeasonManager:
                 result_w1 = solve_transfer_milp(
                     pool, current_squad_ids, gw_col,
                     budget=total_budget, max_transfers=use_now,
+                    captain_col=cap_col,
                 )
                 if result_w1:
                     week1_pts = result_w1["starting_points"]
@@ -1850,6 +1872,7 @@ class SeasonManager:
             result_w2 = solve_transfer_milp(
                 pool, week1_squad_ids, gw_col,
                 budget=week1_budget, max_transfers=next_week_fts,
+                captain_col=cap_col,
             )
             week2_pts = result_w2["starting_points"] if result_w2 else 0
 

@@ -142,10 +142,14 @@ def _get_next_gw() -> int | None:
     for event in data.get("events", []):
         if event.get("is_next"):
             return event["id"]
-    # If no 'is_next', fall back to the one after 'is_current' (capped at 38)
+    # If no 'is_next', fall back to the one after 'is_current'
+    # Bug 95 fix: Return None when season is over (GW38 finished) instead of 38
     for event in data.get("events", []):
         if event.get("is_current"):
-            return min(event["id"] + 1, 38)
+            next_id = event["id"] + 1
+            if next_id > 38:
+                return None
+            return next_id
     return None
 
 
@@ -297,7 +301,16 @@ def api_predictions():
     df[float_cols] = df[float_cols].round(2)
 
     players = _scrub_nan(df.to_dict(orient="records"))
-    return jsonify({"players": players})
+
+    # Add staleness indicator so UI can warn about old predictions
+    csv_path = OUTPUT_DIR / "predictions.csv"
+    generated_at = None
+    if csv_path.exists():
+        import datetime
+        mtime = csv_path.stat().st_mtime
+        generated_at = datetime.datetime.fromtimestamp(mtime).isoformat()
+
+    return jsonify({"players": players, "generated_at": generated_at})
 
 
 @app.route("/api/refresh-data", methods=["POST"])
@@ -378,7 +391,10 @@ def api_train():
         df = _pipeline_cache["df"]
 
         print("Step 4: Training models...")
-        results = train_all_models(df, tune=True)
+        # Bug 98 fix: tune=True grid search excludes the known-best defaults
+        # (150 trees, depth 5, lr 0.1) and consistently picks worse params.
+        # Use the proven defaults instead.
+        results = train_all_models(df, tune=False)
         print("\n  Training Summary (mean models):")
         for r in results:
             print(f"    {r['position']:3s} / {r['target']:18s}: MAE = {r['mae']:.3f}")
@@ -686,6 +702,150 @@ def api_backtest_results():
     return jsonify(_backtest_results)
 
 
+@app.route("/api/monsters")
+def api_monsters():
+    """Return top 3 players for each monster category using actual season stats."""
+    # Load bootstrap for actual stats, photo codes, set piece info, team names
+    bootstrap_path = CACHE_DIR / "fpl_api_bootstrap.json"
+    if not bootstrap_path.exists():
+        return jsonify({"error": "No data available. Refresh data first."})
+    try:
+        bs = json.loads(bootstrap_path.read_text(encoding="utf-8"))
+    except Exception:
+        return jsonify({"error": "Failed to load player data."})
+
+    pos_map = {1: "GKP", 2: "DEF", 3: "MID", 4: "FWD"}
+    team_map = {}
+    for t in bs.get("teams", []):
+        team_map[t.get("code")] = t.get("short_name", "")
+
+    # Build player DataFrame from bootstrap elements
+    rows = []
+    for el in bs.get("elements", []):
+        if (el.get("minutes") or 0) < 90:
+            continue  # skip players with negligible minutes
+        rows.append({
+            "player_id": el["id"],
+            "web_name": el.get("web_name", "Unknown"),
+            "position": pos_map.get(el.get("element_type"), ""),
+            "team_code": el.get("team_code", 0),
+            "cost": round((el.get("now_cost", 0) or 0) / 10, 1),
+            "photo_code": el.get("code", 0),
+            "total_points": el.get("total_points", 0) or 0,
+            "goals": el.get("goals_scored", 0) or 0,
+            "assists": el.get("assists", 0) or 0,
+            "clean_sheets": el.get("clean_sheets", 0) or 0,
+            "bonus": el.get("bonus", 0) or 0,
+            "saves": el.get("saves", 0) or 0,
+            "defcon": el.get("defensive_contribution", 0) or 0,
+            "penalties_order": el.get("penalties_order") or 99,
+            "corners_order": el.get("corners_and_indirect_freekicks_order") or 99,
+            "fk_order": el.get("direct_freekicks_order") or 99,
+        })
+    if not rows:
+        return jsonify({"error": "No player data available."})
+
+    df = pd.DataFrame(rows)
+
+    def _player_card(row, stat_value, stat_label):
+        return {
+            "player_id": int(row["player_id"]),
+            "web_name": row["web_name"],
+            "position": row["position"],
+            "team_code": int(row["team_code"]),
+            "team_short": team_map.get(int(row["team_code"]), ""),
+            "cost": row["cost"],
+            "photo_code": row["photo_code"],
+            "total_pts": int(row["total_points"]),
+            "stat_value": round(float(stat_value), 2) if isinstance(stat_value, float) else int(stat_value),
+            "stat_label": stat_label,
+        }
+
+    categories = []
+
+    # --- 1. Goal Monsters (MID + FWD by goals scored) ---
+    attackers = df[df["position"].isin(["MID", "FWD"])]
+    top = attackers.nlargest(3, "goals")
+    categories.append({
+        "id": "goal_monsters", "title": "Goal Monsters", "emoji": "\u26bd",
+        "subtitle": "Top scorers this season",
+        "players": [_player_card(r, r["goals"], "Goals") for _, r in top.iterrows()],
+    })
+
+    # --- 2. DefCon Monsters (DEF + MID by defensive contribution points) ---
+    def_mids = df[df["position"].isin(["DEF", "MID"])]
+    top = def_mids.nlargest(3, "defcon")
+    categories.append({
+        "id": "defcon_monsters", "title": "DefCon Monsters", "emoji": "\U0001f6e1\ufe0f",
+        "subtitle": "Defensive contribution machines",
+        "players": [_player_card(r, r["defcon"], "DefCon Pts") for _, r in top.iterrows()],
+    })
+
+    # --- 3. Closet Strikers (DEF by goals scored) ---
+    defs = df[df["position"] == "DEF"]
+    top = defs.nlargest(3, "goals")
+    categories.append({
+        "id": "closet_strikers", "title": "Closet Strikers", "emoji": "\U0001f575\ufe0f",
+        "subtitle": "Defenders who think they're forwards",
+        "players": [_player_card(r, r["goals"], "Goals") for _, r in top.iterrows()],
+    })
+
+    # --- 4. Assist Kings (all positions by assists) ---
+    top = df.nlargest(3, "assists")
+    categories.append({
+        "id": "assist_kings", "title": "Assist Kings", "emoji": "\U0001f451",
+        "subtitle": "The creators and providers",
+        "players": [_player_card(r, r["assists"], "Assists") for _, r in top.iterrows()],
+    })
+
+    # --- 5. Set Piece Merchants (by set piece duties + total points) ---
+    df_sp = df.copy()
+    df_sp["_sp_score"] = (
+        (df_sp["penalties_order"] <= 1).astype(int) * 3
+        + (df_sp["corners_order"] <= 2).astype(int) * 2
+        + (df_sp["fk_order"] <= 2).astype(int) * 2
+    )
+    df_sp["_sp_rank"] = df_sp["_sp_score"] + df_sp["total_points"] * 0.01
+    top = df_sp[df_sp["_sp_score"] > 0].nlargest(3, "_sp_rank")
+    if len(top) < 3:
+        top = df_sp.nlargest(3, "_sp_rank")
+    players = []
+    for _, r in top.iterrows():
+        duties = []
+        if r["penalties_order"] <= 1:
+            duties.append("PEN")
+        if r["corners_order"] <= 2:
+            duties.append("CRN")
+        if r["fk_order"] <= 2:
+            duties.append("FK")
+        players.append(_player_card(r, r["_sp_score"], ", ".join(duties) if duties else "SET"))
+    categories.append({
+        "id": "set_piece_merchants", "title": "Set Piece Merchants", "emoji": "\U0001f3af",
+        "subtitle": "Dead ball specialists", "players": players,
+    })
+
+    # --- 6. Value Monsters (total points per million) ---
+    df_val = df[df["cost"] > 0].copy()
+    df_val["_value"] = df_val["total_points"] / df_val["cost"]
+    top = df_val.nlargest(3, "_value")
+    categories.append({
+        "id": "value_monsters", "title": "Value Monsters", "emoji": "\U0001f4b0",
+        "subtitle": "Best bang for your buck",
+        "players": [_player_card(r, round(r["_value"], 2), "Pts/\u00a3m") for _, r in top.iterrows()],
+    })
+
+    # --- 7. Clean Sheet Machines (DEF + GKP by clean sheets) ---
+    cs_players = df[df["position"].isin(["DEF", "GKP"])]
+    top = cs_players.nlargest(3, "clean_sheets")
+    categories.append({
+        "id": "clean_sheet_machines", "title": "Clean Sheet Machines", "emoji": "\U0001f9e4",
+        "subtitle": "The brick walls",
+        "players": [_player_card(r, r["clean_sheets"], "Clean Sheets") for _, r in top.iterrows()],
+    })
+
+    return jsonify({"categories": _scrub_nan(categories)})
+
+
 @app.route("/api/gw-compare", methods=["POST"])
 def api_gw_compare():
     """Compare a manager's actual FPL team against the hindsight-best team for a GW."""
@@ -746,7 +906,10 @@ def api_gw_compare():
             "position": ELEMENT_TYPE_MAP.get(el.get("element_type"), ""),
             "team_code": tc,
             "team": team_map.get(tc, ""),
-            "cost": el.get("now_cost", 0) / 10,
+            # Bug 96 fix: Use historical cost from feature matrix when available
+            "cost": float(season_gw.loc[season_gw["player_id"] == eid, "cost"].iloc[0])
+                    if not season_gw.loc[season_gw["player_id"] == eid, "cost"].empty
+                    else el.get("now_cost", 0) / 10,
             "actual": actuals_map.get(eid, 0),
             "multiplier": pick.get("multiplier", 1),
             "starter": pick.get("position", 12) <= 11,
@@ -1503,6 +1666,8 @@ def api_team_form():
     # All distinct finished GW numbers
     finished_gws = sorted({f["event"] for f in fixtures if f.get("finished") and f.get("event")})
     gw_set = set(finished_gws)
+    # Bug 97 fix: Only count last 10 GWs for form_points sort order
+    last_10_gws = set(finished_gws[-10:]) if len(finished_gws) > 10 else set(finished_gws)
 
     # Build per-team results
     teams = {}
@@ -1546,7 +1711,9 @@ def api_team_form():
                 "result": h_result,
                 "match_detail": match_detail,
             })
-            teams[h_id]["form_points"] += 3 if h_result == "W" else (1 if h_result == "D" else 0)
+            # Bug 97 fix: Only count last 10 GWs for form_points sort order
+            if gw in last_10_gws:
+                teams[h_id]["form_points"] += 3 if h_result == "W" else (1 if h_result == "D" else 0)
 
         if a_id in teams:
             teams[a_id]["results"][gw_key].append({
@@ -1558,7 +1725,9 @@ def api_team_form():
                 "result": a_result,
                 "match_detail": match_detail,
             })
-            teams[a_id]["form_points"] += 3 if a_result == "W" else (1 if a_result == "D" else 0)
+            # Bug 97 fix: Only count last 10 GWs for form_points sort order
+            if gw in last_10_gws:
+                teams[a_id]["form_points"] += 3 if a_result == "W" else (1 if a_result == "D" else 0)
 
     return jsonify({
         "gw_columns": finished_gws,
@@ -1582,11 +1751,15 @@ def _get_combined_match_data():
     if _player_match_cache["pms"] is not None and now - _player_match_cache["ts"] < 1800:
         return _player_match_cache["pms"], _player_match_cache["mat"]
 
+    # Bug 94 fix: Detect season dynamically instead of hardcoding
+    from src.data_fetcher import detect_current_season
+    season = detect_current_season()
+
     pms_frames = []
     mat_frames = []
     for gw_num in range(1, 39):
-        pms_path = CACHE_DIR / f"2025-2026_gw{gw_num}_playermatchstats.csv"
-        mat_path = CACHE_DIR / f"2025-2026_gw{gw_num}_matches.csv"
+        pms_path = CACHE_DIR / f"{season}_gw{gw_num}_playermatchstats.csv"
+        mat_path = CACHE_DIR / f"{season}_gw{gw_num}_matches.csv"
         if not pms_path.exists() or not mat_path.exists():
             continue
         try:
@@ -1726,7 +1899,10 @@ def api_player_detail(player_id):
     # --- Per-GW history from playerstats CSV ---
     gw_history = []
     available_gws = []
-    playerstats_path = CACHE_DIR / "2025-2026_playerstats.csv"
+    # Bug 94 fix: Detect season dynamically instead of hardcoding
+    from src.data_fetcher import detect_current_season
+    _detail_season = detect_current_season()
+    playerstats_path = CACHE_DIR / f"{_detail_season}_playerstats.csv"
     if playerstats_path.exists():
         try:
             ps_df = pd.read_csv(playerstats_path)

@@ -303,8 +303,8 @@ class ChipEvaluator:
                     squad_combined["position"] = squad_combined["player_id"].map(pos_map)
                     squad_combined = squad_combined.dropna(subset=["position"])
                 if len(squad_combined) >= 11:
-                    xi = MultiWeekPlanner._select_formation_xi(squad_combined)
-                    current_3gw = xi["predicted_points"].sum()
+                    # Bug 91 fix: Use captain-aware points for fair WC comparison
+                    current_3gw = MultiWeekPlanner._squad_points_with_captain(squad_combined)
                 else:
                     current_3gw = squad_combined["predicted_points"].sum()
                 squad_combined = squad_combined.rename(columns={"predicted_points": "total_pts"})
@@ -320,7 +320,11 @@ class ChipEvaluator:
                         on="player_id", how="left",
                     )
                     pool = pool.dropna(subset=["position", "cost"])
-                    wc_result = solve_milp_team(pool, "total_pts", budget=total_budget)
+                    # Bug 91 fix: Include captain optimization in WC evaluation
+                    # (consistent with FH evaluation which already passes captain_col)
+                    wc_cap_col = "captain_score" if "captain_score" in pool.columns else None
+                    wc_result = solve_milp_team(pool, "total_pts", budget=total_budget,
+                                                captain_col=wc_cap_col)
                     if wc_result:
                         values[gw] = round(max(0, wc_result["starting_points"] - current_3gw), 1)
                     else:
@@ -582,8 +586,10 @@ class MultiWeekPlanner:
         for pts_val, idx_val, pos in extras:
             if len(starters_idx) >= 11:
                 break
-            starters_idx.add(idx_val)
-            picked[pos] += 1
+            # Bug 93 fix: Re-check position max before adding (safety guard)
+            if picked[pos] < maxs.get(pos, 99):
+                starters_idx.add(idx_val)
+                picked[pos] += 1
 
         return squad_preds.loc[list(starters_idx)]
 
@@ -603,7 +609,14 @@ class MultiWeekPlanner:
         # Use captain_score for selection (consistent with MILP), but bonus is
         # the captain's predicted_points (expected value of doubling).
         score_col = "captain_score" if "captain_score" in top11.columns else "predicted_points"
-        captain_idx = top11[score_col].idxmax()
+        # Bug 92 fix: Guard against all-NaN captain_score (e.g. squad of unknown players)
+        try:
+            captain_idx = top11[score_col].idxmax()
+        except ValueError:
+            try:
+                captain_idx = top11["predicted_points"].idxmax()
+            except ValueError:
+                return pts  # No valid captain, return XI points only
         captain_bonus = top11.loc[captain_idx, "predicted_points"]
         return pts + captain_bonus
 
