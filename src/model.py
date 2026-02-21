@@ -674,7 +674,7 @@ FPL_SCORING = {
     "GKP": {"appearance": 2, "goal": 10, "assist": 3, "cs": 4, "gc_per_2": -1, "save_per_3": 1, "defcon": 2, "defcon_threshold": 10},
     "DEF": {"appearance": 2, "goal": 6, "assist": 3, "cs": 4, "gc_per_2": -1, "save_per_3": 0, "defcon": 2, "defcon_threshold": 10},
     "MID": {"appearance": 2, "goal": 5, "assist": 3, "cs": 1, "gc_per_2": 0, "save_per_3": 0, "defcon": 2, "defcon_threshold": 12},
-    "FWD": {"appearance": 2, "goal": 4, "assist": 3, "cs": 0, "gc_per_2": 0, "save_per_3": 0, "defcon": 0, "defcon_threshold": 12},
+    "FWD": {"appearance": 2, "goal": 4, "assist": 3, "cs": 0, "gc_per_2": 0, "save_per_3": 0, "defcon": 2, "defcon_threshold": 12},
 }
 
 # Feature sets tailored to each sub-model — smaller and more focused than the
@@ -744,8 +744,9 @@ SUB_MODEL_FEATURES = {
         "opp_big_chances_allowed_last3",
     ],
     "defcon": [
-        # Composite CBIT and individual defensive action features
+        # Composite CBIT/CBIRT and individual defensive action features
         "player_cbit_last3", "player_cbit_last5",
+        "player_recoveries_last3", "player_recoveries_last5",
         "player_clearances_last3", "player_blocks_last3",
         "player_interceptions_last3", "player_tackles_won_last3",
         "player_aerial_duels_won_last3",
@@ -765,7 +766,7 @@ SUB_MODELS_FOR_POSITION = {
     "GKP": ["cs", "goals_conceded", "saves", "bonus"],
     "DEF": ["goals", "assists", "cs", "goals_conceded", "bonus", "defcon"],
     "MID": ["goals", "assists", "cs", "bonus", "defcon"],
-    "FWD": ["goals", "assists", "bonus"],
+    "FWD": ["goals", "assists", "bonus", "defcon"],
 }
 
 
@@ -783,6 +784,9 @@ def train_sub_model(
     from xgboost import XGBRegressor
 
     target = SUB_MODEL_COMPONENTS[component]
+    # MID/FWD DefCon uses CBIRT (5 components incl. recoveries) at threshold 12
+    if component == "defcon" and position in ("MID", "FWD"):
+        target = "next_gw_cbirt"
     feature_cols = SUB_MODEL_FEATURES.get(component, [])
 
     pos_df, available_feats = _prepare_position_data(
@@ -1038,8 +1042,9 @@ def predict_decomposed(
     else:
         pos_df["pts_bonus"] = 0.0
 
-    # Defensive contributions (DefCon): +2 pts if CBIT >= threshold
-    # sub_defcon predicts expected CBIT count; convert to P(defcon) via Poisson CDF
+    # Defensive contributions (DefCon): +2 pts if CBIT/CBIRT >= threshold
+    # sub_defcon predicts expected CBIT (GKP/DEF) or CBIRT (MID/FWD) count;
+    # convert to P(defcon) via Poisson CDF
     if "sub_defcon" in pos_df.columns and scoring.get("defcon", 0) > 0:
         from scipy.stats import poisson
         threshold = scoring.get("defcon_threshold", 10)

@@ -673,6 +673,13 @@ def _build_decomposed_targets(
             pms[c] = pd.to_numeric(pms[c], errors="coerce").fillna(0)
         pms["cbit"] = pms[_cbit_available].sum(axis=1)
         pms_cols["cbit"] = "gw_cbit"
+        # CBIRT = CBIT + recoveries (used for MID/FWD DefCon at threshold 12)
+        if "recoveries" in pms.columns:
+            pms["recoveries"] = pd.to_numeric(pms["recoveries"], errors="coerce").fillna(0)
+            pms["cbirt"] = pms["cbit"] + pms["recoveries"]
+        else:
+            pms["cbirt"] = pms["cbit"]
+        pms_cols["cbirt"] = "gw_cbirt"
 
     available_pms = {k: v for k, v in pms_cols.items() if k in pms.columns}
 
@@ -1540,7 +1547,7 @@ def get_feature_columns(df: pd.DataFrame) -> list[str]:
         # Decomposed targets (future data — must not be used as features)
         "next_gw_minutes", "next_gw_goals", "next_gw_assists", "next_gw_cs",
         "next_gw_bonus", "next_gw_goals_conceded", "next_gw_saves",
-        "next_gw_cbit",
+        "next_gw_cbit", "next_gw_cbirt",
     }
     # Also exclude set piece order raw columns (we use the binary flag)
     exclude.update({"penalties_order", "corners_order", "freekicks_order",

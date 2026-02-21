@@ -129,16 +129,18 @@ def _build_offset_snapshot(
     # Look up vs_opponent_* history from df for the new opponents
     if vs_opp_cols:
         # Extract the latest vs_opponent record per (player_id, opponent_code)
-        vs_src_cols = ["player_id", "opponent_code"] + vs_opp_cols
+        vs_src_cols = ["player_id", "opponent_code", "gameweek"] + vs_opp_cols
         vs_src = df[[c for c in vs_src_cols if c in df.columns]].copy()
         vs_src = vs_src.dropna(subset=["opponent_code"])
         vs_src = vs_src.dropna(subset=[c for c in vs_opp_cols if c in vs_src.columns], how="all")
         if not vs_src.empty:
             vs_src["opponent_code"] = vs_src["opponent_code"].astype(int)
             snapshot["opponent_code"] = snapshot["opponent_code"].astype(int)
+            vs_src = vs_src.sort_values(["player_id", "opponent_code", "gameweek"])
             vs_latest = vs_src.drop_duplicates(
                 subset=["player_id", "opponent_code"], keep="last"
             )
+            vs_latest = vs_latest.drop(columns=["gameweek"], errors="ignore")
             snapshot = snapshot.merge(
                 vs_latest, on=["player_id", "opponent_code"], how="left"
             )
