@@ -194,7 +194,7 @@ def _build_offset_snapshot(
     return snapshot
 
 
-ENSEMBLE_WEIGHT_DECOMPOSED = 0.5
+ENSEMBLE_WEIGHT_DECOMPOSED = 0.15
 
 
 def _ensemble_predict_position(
