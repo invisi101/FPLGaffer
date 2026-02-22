@@ -511,8 +511,16 @@ def _build_fixture_map(matches: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _build_playerstats_features(playerstats: pd.DataFrame) -> pd.DataFrame:
-    """Extract per-player-per-GW features from the FPL playerstats snapshot."""
+def _build_playerstats_features(
+    playerstats: pd.DataFrame, bootstrap_elements: list[dict] | None = None,
+) -> pd.DataFrame:
+    """Extract per-player-per-GW features from the FPL playerstats snapshot.
+
+    When *bootstrap_elements* is provided (from FPL API bootstrap-static),
+    the latest GW's cumulative ICT/BPS values are overridden with fresh API
+    data.  The GitHub playerstats CSV can have stale ICT for some players,
+    causing zero per-GW deltas and broken predictions.
+    """
     feature_cols = {
         "event_points": "event_points",
         "form": "player_form",
@@ -569,6 +577,34 @@ def _build_playerstats_features(playerstats: pd.DataFrame) -> pd.DataFrame:
         for c in sp_cols:
             result[c] = result[c].fillna(99)
         result["set_piece_involvement"] = (result[sp_cols].min(axis=1) <= 2).astype(int)
+
+    # Override latest GW cumulative ICT/BPS with fresh FPL API data
+    if bootstrap_elements is not None:
+        max_gw = result["gameweek"].max()
+        api_lookup = {}
+        for el in bootstrap_elements:
+            api_lookup[el["id"]] = {
+                "influence": float(el.get("influence", 0)),
+                "creativity": float(el.get("creativity", 0)),
+                "threat": float(el.get("threat", 0)),
+                "ict_index": float(el.get("ict_index", 0)),
+                "player_bps": int(el.get("bps", 0)),
+            }
+        latest_mask = result["gameweek"] == max_gw
+        patched = 0
+        for col in ["influence", "creativity", "threat", "ict_index", "player_bps"]:
+            if col not in result.columns:
+                continue
+            for idx in result.index[latest_mask]:
+                pid = result.at[idx, "player_id"]
+                if pid in api_lookup:
+                    old_val = result.at[idx, col]
+                    new_val = api_lookup[pid][col]
+                    if old_val != new_val:
+                        result.at[idx, col] = new_val
+                        patched += 1
+        if patched:
+            print(f"    Patched {patched} stale ICT/BPS values in GW{max_gw} from FPL API")
 
     # Convert cumulative season totals to per-GW deltas
     for cum_col in ["influence", "creativity", "threat", "ict_index", "player_bps"]:
@@ -1058,7 +1094,11 @@ def build_features(data: dict) -> pd.DataFrame:
                 fixture_map = pd.concat([fixture_map, pd.DataFrame(future_rows)], ignore_index=True)
 
         # 5. Playerstats features (form, BPS, ICT, cost, etc.)
-        ps_features = _build_playerstats_features(playerstats)
+        # For current season, pass bootstrap elements to fix stale GitHub ICT
+        api_elements = None
+        if season_label == current_season:
+            api_elements = data.get("api", {}).get("bootstrap", {}).get("elements")
+        ps_features = _build_playerstats_features(playerstats, bootstrap_elements=api_elements)
 
         # 6. Targets
         targets = _build_targets(playerstats)
