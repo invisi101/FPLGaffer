@@ -45,7 +45,6 @@ DEFAULT_FEATURES = {
         "player_minutes_played_last3", "chance_of_playing", "cs_opportunity",
         "opp_opponent_shots_on_target_last3", "gw_influence", "ownership",
         "team_form_5", "next_gw_fixture_count", "season_progress",
-        "avg_fdr_next3", "home_pct_next3", "avg_opponent_elo_next3",
         # GKP-specific save data
         "player_saves_last3", "player_saves_last5", "saves_per_90",
         # Clean sheet and starter data
@@ -82,7 +81,6 @@ DEFAULT_FEATURES = {
         "chance_of_playing", "gw_influence", "gw_threat", "gw_creativity",
         "set_piece_involvement", "team_form_5",
         "next_gw_fixture_count", "season_progress",
-        "avg_fdr_next3", "home_pct_next3", "avg_opponent_elo_next3",
         # Clean sheet and starter data
         "clean_sheets_per_90", "starts_per_90", "xgc_per_90",
         # Own-team strength
@@ -123,7 +121,6 @@ DEFAULT_FEATURES = {
         "gw_influence", "gw_threat", "gw_creativity", "gw_ict_index",
         "set_piece_involvement", "team_form_5",
         "next_gw_fixture_count", "season_progress",
-        "avg_fdr_next3", "home_pct_next3", "avg_opponent_elo_next3",
         # Starter and transfer data
         "starts_per_90", "transfers_in_event",
         # Own-team attacking strength
@@ -164,7 +161,6 @@ DEFAULT_FEATURES = {
         "gw_influence", "gw_threat", "gw_creativity", "gw_ict_index",
         "set_piece_involvement", "chances_x_opp_big_chances",
         "team_form_5", "next_gw_fixture_count", "season_progress",
-        "avg_fdr_next3", "home_pct_next3", "avg_opponent_elo_next3",
         # Starter and transfer data
         "starts_per_90", "transfers_in_event",
         # Own-team attacking strength
@@ -239,8 +235,7 @@ def _prepare_position_data(df: pd.DataFrame, position: str, target: str, feature
     # Require at least half the features to be non-null
     pos_df = pos_df.dropna(subset=available_feats, thresh=(len(available_feats) + 1) // 2)
     # Use semantically correct defaults for features where 0 is misleading
-    _fill_defaults = {"opponent_elo": 1500.0, "fdr": 3.0, "avg_fdr_next3": 3.0,
-                      "avg_opponent_elo_next3": 1500.0, "home_pct_next3": 0.5}
+    _fill_defaults = {"opponent_elo": 1500.0, "fdr": 3.0}
     for c in available_feats:
         pos_df[c] = pos_df[c].fillna(_fill_defaults.get(c, 0))
 
@@ -496,8 +491,7 @@ def predict_for_position(
         print(f"  WARNING: {position}/{target}{suffix}: {len(missing_feats)}/{len(features)} features missing: {missing_feats[:5]}...")
 
     # Use same semantically correct defaults as training (_prepare_position_data)
-    _fill_defaults = {"opponent_elo": 1500.0, "fdr": 3.0, "avg_fdr_next3": 3.0,
-                      "avg_opponent_elo_next3": 1500.0, "home_pct_next3": 0.5}
+    _fill_defaults = {"opponent_elo": 1500.0, "fdr": 3.0}
     for c in available_feats:
         pos_df[c] = pos_df[c].fillna(_fill_defaults.get(c, 0))
 
@@ -959,8 +953,7 @@ def predict_decomposed(
             continue
 
         _fill_defaults = {
-            "opponent_elo": 1500.0, "fdr": 3.0, "avg_fdr_next3": 3.0,
-            "avg_opponent_elo_next3": 1500.0, "home_pct_next3": 0.5,
+            "opponent_elo": 1500.0, "fdr": 3.0,
         }
         for c in available:
             pos_df[c] = pos_df[c].fillna(_fill_defaults.get(c, 0))
@@ -979,14 +972,16 @@ def predict_decomposed(
         return pd.DataFrame()
 
     # --- Combine using FPL scoring rules ---
-    # P(plays) = chance_of_playing/100 * availability_rate_last5.
-    # chance_of_playing (0-100) is "available to play" from FPL API — but it
-    # doesn't distinguish starters from bench warmers (backup GKPs get 100%).
-    # Multiplying by availability_rate_last5 (fraction of recent GWs with
-    # minutes) filters out players who are fit but don't actually get selected.
-    cop = pos_df["chance_of_playing"].fillna(100) / 100.0 if "chance_of_playing" in pos_df.columns else 0.8
+    # P(plays): Use chance_of_playing when it signals doubt (< 100), otherwise
+    # fall back to availability_rate_last5 to filter bench warmers.
+    # When COP < 100, the FPL flag already encodes current injury status —
+    # multiplying by availability_rate would double-penalise returning players
+    # (e.g. 75% COP × 0.6 avail = 0.45 instead of the intended ~0.75).
+    cop = pos_df["chance_of_playing"].fillna(100) / 100.0 if "chance_of_playing" in pos_df.columns else pd.Series(0.8, index=pos_df.index)
     avail = pos_df["availability_rate_last5"].fillna(0.75) if "availability_rate_last5" in pos_df.columns else pd.Series(0.75, index=pos_df.index)
-    pos_df["p_plays"] = (cop * avail).clip(0, 1)
+    pos_df["p_plays"] = pd.Series(
+        np.where(cop < 1.0, cop, avail), index=pos_df.index
+    ).clip(0, 1)
     # Per-player P(60+ | plays) from minutes history instead of blanket 0.85.
     # avg_mins_per_appearance / 90 gives ~1.0 for full-game starters, ~0.33 for
     # super-subs, improving CS and appearance point estimates.

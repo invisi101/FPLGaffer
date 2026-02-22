@@ -154,7 +154,9 @@ def _build_offset_snapshot(
         snapshot["chances_x_opp_big_chances"] = (
             snapshot["player_chances_created_last3"] * snapshot["opp_big_chances_allowed_last3"]
         )
-    if "opp_opponent_xg_last3" in snapshot.columns:
+    if "opp_xg_last3" in snapshot.columns:
+        snapshot["cs_opportunity"] = 1.0 / (snapshot["opp_xg_last3"] + 0.1)
+    elif "opp_opponent_xg_last3" in snapshot.columns:
         snapshot["cs_opportunity"] = 1.0 / (snapshot["opp_opponent_xg_last3"] + 0.1)
     if "home_xg_form" in snapshot.columns and "away_xg_form" in snapshot.columns:
         snapshot["venue_matched_form"] = np.where(
@@ -285,11 +287,14 @@ def _predict_next_3gw_from_1gw(
 
         if gw_preds:
             gw_df = pd.concat(gw_preds, ignore_index=True)
+            # Apply confidence decay: 0.95^(offset-1) — consistent with predict_future_range
+            decay = 0.95 ** (offset - 1)
+            gw_df["predicted_next_gw_points"] *= decay
             gw_df = gw_df.rename(columns={"predicted_next_gw_points": f"pred_gw{target_gw}"})
             per_gw_preds.append(gw_df)
             n_players = len(gw_df)
             avg_pts = gw_df[f"pred_gw{target_gw}"].mean()
-            print(f"  GW{target_gw}: {n_players} players, avg {avg_pts:.2f} pts")
+            print(f"  GW{target_gw}: {n_players} players, avg {avg_pts:.2f} pts (decay={decay:.4f})")
 
             # Collect fixture info for each player in this GW
             fixture_info = snapshot[["player_id", "team_code"]].drop_duplicates(

@@ -502,6 +502,124 @@ Group findings by file. Deduplicate — if the same pattern appears in multiple 
 
 ---
 
+## Benchmarking & Validation Protocol
+
+When the user says **"run benchmarks"** or **"validate the model"**, execute this protocol. Run it after any model change, feature engineering change, or methodology fix.
+
+### Step 1: Targeted Fix/Feature Tests
+
+Write a standalone Python script (in `/private/tmp/`) that tests each specific change. The script should:
+
+1. Load data and build features once
+2. For each change, write focused assertions:
+   - **Feature changes**: Verify features are present/absent in `DEFAULT_FEATURES` and trained model feature lists
+   - **Computation fixes**: Compare the fixed computation against expected values using synthetic data AND real data
+   - **Logic changes**: Test edge cases (e.g., COP=0, COP=50, COP=100 for P(plays) changes)
+3. Run sanity checks:
+   - No negative predictions for any position
+   - No absurdly high predictions (>15 pts for 1-GW, >45 for 3-GW)
+   - Unavailable players (COP=0) predict ~0 in decomposed path
+   - Top predicted players pass the "smell test" (known starters with good fixtures, not bench warmers)
+   - 3-GW sum shows correct decay ratio relative to 1-GW predictions
+
+**Pass criteria**: All assertions pass. Any failure blocks the change.
+
+### Step 2: Walk-Forward Backtest (Before/After)
+
+This is the definitive test. It retrains models from scratch for each GW — no cached model contamination.
+
+**IMPORTANT**: The backtest has its own copy of decomposed prediction logic in `_predict_decomposed_backtest()` (`src/backtest.py`). Any changes to `predict_decomposed()` in `model.py` must be mirrored there, or the backtest won't test the fix.
+
+**Protocol**:
+1. `git stash` your changes
+2. Start server, run backtest: `POST /api/backtest {"start_gw":10,"end_gw":27}`
+3. Save results: `GET /api/backtest-results` → `/private/tmp/backtest_baseline.json`
+4. Kill server, `git stash pop`
+5. Start server, run same backtest
+6. Save results → `/private/tmp/backtest_postfix.json`
+7. Compare with a script that shows deltas for every metric
+
+**Key metrics to compare**:
+
+| Metric | What it measures | Direction | Importance |
+|--------|-----------------|-----------|------------|
+| `model_avg_mae` | Overall prediction accuracy | Lower | Primary |
+| `model_avg_mae_played` | Accuracy for players who played | Lower | Primary |
+| `avg_spearman` | Ranking quality (who's better than whom) | Higher | Primary |
+| `avg_ndcg_top20` | Quality of top-20 ranking | Higher | High |
+| `model_avg_top11_pts` | Points from model's best XI | Higher | High |
+| `model_capture_pct` | % of theoretical-best achieved | Higher | High |
+| `model_wins` vs `ep_wins` | Head-to-head vs FPL's ep_next | More wins | Medium |
+| `captain_hit_rate` | Captain in top-3 scorers | Higher | Medium |
+| `mae_pvalue` | Statistical significance of MAE improvement | Lower | Validation |
+
+**Pass criteria**:
+- `model_avg_mae` must not increase (same or lower)
+- `model_avg_top11_pts` must not decrease
+- No more than 2 individual GWs should regress in MAE
+- Per-position MAE: no position should regress by more than 0.05
+
+**Strong pass** (confidently merge):
+- MAE improves by ≥0.01
+- Top-11 points improve by ≥1.0
+- Majority of GWs improve
+
+### Step 3: Prediction Spot-Checks
+
+After training with the new code, do a common-sense review:
+
+```bash
+# Top 10 predicted players — do these make sense?
+curl -s http://127.0.0.1:9875/api/predictions | python3 -c "
+import sys,json; d=json.load(sys.stdin)['players']
+d.sort(key=lambda x: x.get('predicted_next_gw_points',0), reverse=True)
+for p in d[:10]:
+    print(f\"{p['web_name']:15} {p['position']:3} {p.get('predicted_next_gw_points',0):.2f} pts\")
+"
+
+# Check doubtful players aren't being over/under-predicted
+curl -s http://127.0.0.1:9875/api/predictions | python3 -c "
+import sys,json; d=json.load(sys.stdin)['players']
+doubt = [p for p in d if 0 < p.get('chance_of_playing',100) < 100]
+doubt.sort(key=lambda x: x.get('predicted_next_gw_points',0), reverse=True)
+for p in doubt[:5]:
+    print(f\"{p['web_name']:15} COP={p.get('chance_of_playing',100)}% pred={p.get('predicted_next_gw_points',0):.2f}\")
+"
+```
+
+### Quick Reference Commands
+
+```bash
+# Run backtest (GW10-27 current season)
+curl -s -X POST http://127.0.0.1:9875/api/backtest -H 'Content-Type: application/json' -d '{"start_gw":10,"end_gw":27}'
+
+# Fetch results
+curl -s http://127.0.0.1:9875/api/backtest-results | python3 -c "
+import sys,json; s=json.load(sys.stdin)['summary']
+print(f'MAE={s[\"model_avg_mae\"]:.4f} rho={s[\"avg_spearman\"]:.4f} top11={s[\"model_avg_top11_pts\"]:.1f} cap%={s[\"model_capture_pct\"]:.1f}%')
+print(f'vs ep: {s[\"model_wins\"]}W-{s[\"ep_wins\"]}L | MAE p={s.get(\"mae_pvalue\",\"?\")}')"
+
+# Multi-season backtest (more data, slower)
+curl -s -X POST http://127.0.0.1:9875/api/backtest -H 'Content-Type: application/json' -d '{"start_gw":10,"end_gw":27,"seasons":["2024-2025","2025-2026"]}'
+```
+
+### Current Baseline (2025-02-22, post-methodology-fixes)
+
+| Metric | Value |
+|--------|-------|
+| Model MAE | 1.0640 |
+| Model MAE (played) | 2.1360 |
+| Spearman rho | 0.6680 |
+| NDCG@20 | 0.4610 |
+| Top-11 pts | 54.60 |
+| Capture % | 40.0% |
+| Win rate vs ep | 11W-5L-2T |
+| MAE p-value | 0.0000 |
+
+Per-position MAE: GKP=0.781, DEF=1.246, MID=0.997, FWD=1.053
+
+---
+
 ## Remaining TODO: Rethink Backtesting & Feature Visualization
 
 The following 4 UI buttons have been **removed from the frontend** (but all backend code is preserved):

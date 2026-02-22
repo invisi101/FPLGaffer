@@ -137,8 +137,7 @@ def _predict_decomposed_backtest(
         return pd.DataFrame()
 
     _fill_defaults = {
-        "opponent_elo": 1500.0, "fdr": 3.0, "avg_fdr_next3": 3.0,
-        "avg_opponent_elo_next3": 1500.0,
+        "opponent_elo": 1500.0, "fdr": 3.0,
     }
 
     for comp, model_dict in sub_models.items():
@@ -156,11 +155,20 @@ def _predict_decomposed_backtest(
         pos_df[f"sub_{comp}"] = model.predict(X).clip(min=0)
 
     # Combine using FPL rules (same logic as model.predict_decomposed)
-    # P(plays) = chance_of_playing/100 * availability_rate_last5
-    cop = pos_df["chance_of_playing"].fillna(0) / 100.0 if "chance_of_playing" in pos_df.columns else 0.8
-    avail = pos_df["availability_rate_last5"].fillna(0) if "availability_rate_last5" in pos_df.columns else 1.0
-    pos_df["p_plays"] = (cop * avail).clip(0, 1)
-    pos_df["p_60plus"] = pos_df["p_plays"] * 0.85
+    # P(plays): Use COP when it signals doubt (< 100), else availability_rate
+    cop = pos_df["chance_of_playing"].fillna(100) / 100.0 if "chance_of_playing" in pos_df.columns else pd.Series(0.8, index=pos_df.index)
+    avail = pos_df["availability_rate_last5"].fillna(0.75) if "availability_rate_last5" in pos_df.columns else pd.Series(0.75, index=pos_df.index)
+    pos_df["p_plays"] = pd.Series(
+        np.where(cop < 1.0, cop, avail), index=pos_df.index
+    ).clip(0, 1)
+    # Per-player P(60+ | plays) from minutes history
+    if "player_minutes_played_last5" in pos_df.columns and "availability_rate_last5" in pos_df.columns:
+        _games = (pos_df["availability_rate_last5"].fillna(0.75) * 5).clip(lower=0.5)
+        _avg_mins = pos_df["player_minutes_played_last5"].fillna(0) / _games
+        _p60_rate = (_avg_mins / 90.0).clip(0.1, 0.99)
+        pos_df["p_60plus"] = pos_df["p_plays"] * _p60_rate
+    else:
+        pos_df["p_60plus"] = pos_df["p_plays"] * 0.85
 
     pos_df["predicted_next_gw_points"] = (
         pos_df["p_60plus"] * 2 + (pos_df["p_plays"] - pos_df["p_60plus"]).clip(lower=0) * 1
