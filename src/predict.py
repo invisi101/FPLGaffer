@@ -31,12 +31,38 @@ else:
 OUTPUT_DIR = _BASE / "output"
 
 
-def get_latest_gw(df: pd.DataFrame, season: str = CURRENT_SEASON) -> int:
-    """Find the latest gameweek in the dataset for the current season."""
+def get_latest_gw(
+    df: pd.DataFrame, season: str = CURRENT_SEASON, *, data: dict | None = None
+) -> int:
+    """Find the latest gameweek with complete data for the current season.
+
+    When the FPL API bootstrap is available (via *data*), GWs that are not yet
+    ``data_checked`` are skipped so predictions use clean, finalised features
+    rather than partial mid-GW snapshots (where ICT/BPS/form are unreliable).
+    """
     season_df = df[df["season"] == season]
     if season_df.empty:
         return int(df["gameweek"].max())
-    return int(season_df["gameweek"].max())
+
+    max_gw = int(season_df["gameweek"].max())
+
+    # Check FPL API for data_checked status
+    if data is not None:
+        events = {}
+        api = data.get("api", {})
+        bootstrap = api.get("bootstrap", {})
+        for ev in bootstrap.get("events", []):
+            events[ev["id"]] = ev
+        if events:
+            # Walk backwards from max_gw to find last data_checked GW
+            for gw in range(max_gw, 0, -1):
+                ev = events.get(gw)
+                if ev and ev.get("data_checked", False):
+                    if gw < max_gw:
+                        print(f"  GW{max_gw} not data_checked, using GW{gw} as prediction base")
+                    return gw
+
+    return max_gw
 
 
 def _build_offset_snapshot(
@@ -504,7 +530,7 @@ def build_preseason_predictions(
 
 def run_predictions(df: pd.DataFrame, data: dict | None = None) -> pd.DataFrame:
     """Generate predictions for all players for the upcoming gameweek(s)."""
-    latest_gw = get_latest_gw(df)
+    latest_gw = get_latest_gw(df, data=data)
     print(f"\nLatest gameweek in data: GW{latest_gw}")
 
     # Use the latest GW snapshot as the basis for prediction

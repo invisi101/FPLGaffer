@@ -1,10 +1,27 @@
 """Backtest module: evaluate model accuracy against historical gameweeks."""
 
+import json
+
 import numpy as np
 import pandas as pd
 from scipy.stats import spearmanr, wilcoxon
 from sklearn.metrics import ndcg_score
 from xgboost import XGBRegressor
+
+
+def _json_safe(obj):
+    """Recursively convert numpy types to native Python for JSON serialization."""
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, (np.floating,)):
+        return float(obj)
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    return obj
 
 from src.model import (
     CURRENT_SEASON,
@@ -17,8 +34,11 @@ from src.model import (
     SUB_MODELS_FOR_POSITION,
     _prepare_position_data,
     _season_weight,
+    predict_decomposed,
     predict_for_position,
 )
+
+ENSEMBLE_WEIGHT_DECOMPOSED = 0.15
 
 
 def _bootstrap_ci(values, n_boot=10000, ci=0.95):
@@ -122,101 +142,6 @@ def _train_backtest_sub_models(
     return models
 
 
-def _predict_decomposed_backtest(
-    snapshot: pd.DataFrame, position: str,
-    sub_models: dict[str, dict],
-) -> pd.DataFrame:
-    """Generate decomposed predictions for backtesting using provided models.
-
-    Same logic as model.predict_decomposed but uses in-memory model dicts
-    instead of loading from disk.
-    """
-    scoring = FPL_SCORING[position]
-    pos_df = snapshot[snapshot["position_clean"] == position].copy()
-    if pos_df.empty:
-        return pd.DataFrame()
-
-    _fill_defaults = {
-        "opponent_elo": 1500.0, "fdr": 3.0,
-    }
-
-    for comp, model_dict in sub_models.items():
-        model = model_dict["model"]
-        features = model_dict["features"]
-        available = [c for c in features if c in pos_df.columns]
-        if not available:
-            continue
-        for c in available:
-            pos_df[c] = pos_df[c].fillna(_fill_defaults.get(c, 0))
-        X = np.zeros((len(pos_df), len(features)))
-        for i, f in enumerate(features):
-            if f in pos_df.columns:
-                X[:, i] = pos_df[f].values
-        pos_df[f"sub_{comp}"] = model.predict(X).clip(min=0)
-
-    # Combine using FPL rules (same logic as model.predict_decomposed)
-    # P(plays): Use COP when it signals doubt (< 100), else availability_rate
-    cop = pos_df["chance_of_playing"].fillna(100) / 100.0 if "chance_of_playing" in pos_df.columns else pd.Series(0.8, index=pos_df.index)
-    avail = pos_df["availability_rate_last5"].fillna(0.75) if "availability_rate_last5" in pos_df.columns else pd.Series(0.75, index=pos_df.index)
-    pos_df["p_plays"] = pd.Series(
-        np.where(cop < 1.0, cop, avail), index=pos_df.index
-    ).clip(0, 1)
-    # Per-player P(60+ | plays) from minutes history
-    if "player_minutes_played_last5" in pos_df.columns and "availability_rate_last5" in pos_df.columns:
-        _games = (pos_df["availability_rate_last5"].fillna(0.75) * 5).clip(lower=0.5)
-        _avg_mins = pos_df["player_minutes_played_last5"].fillna(0) / _games
-        _p60_rate = (_avg_mins / 90.0).clip(0.1, 0.99)
-        pos_df["p_60plus"] = pos_df["p_plays"] * _p60_rate
-    else:
-        pos_df["p_60plus"] = pos_df["p_plays"] * 0.85
-
-    pos_df["predicted_next_gw_points"] = (
-        pos_df["p_60plus"] * 2 + (pos_df["p_plays"] - pos_df["p_60plus"]).clip(lower=0) * 1
-    )
-
-    # Sub-models trained on played-only -> predict E[component | plays]
-    # Gate by P(plays) to get unconditional expectation
-    if "sub_goals" in pos_df.columns:
-        pos_df["predicted_next_gw_points"] += (
-            pos_df["p_plays"] * pos_df["sub_goals"] * scoring["goal"]
-        )
-    if "sub_assists" in pos_df.columns:
-        pos_df["predicted_next_gw_points"] += (
-            pos_df["p_plays"] * pos_df["sub_assists"] * scoring["assist"]
-        )
-    if "sub_cs" in pos_df.columns and scoring["cs"] > 0:
-        pos_df["predicted_next_gw_points"] += (
-            pos_df["p_60plus"] * pos_df["sub_cs"] * scoring["cs"]
-        )
-    if "sub_goals_conceded" in pos_df.columns and scoring["gc_per_2"] != 0:
-        # Continuous E[GC]/2 instead of floor — avoids Jensen's inequality bias (Fix 3)
-        pos_df["predicted_next_gw_points"] += (
-            pos_df["p_60plus"] * (pos_df["sub_goals_conceded"] / 2) * scoring["gc_per_2"]
-        )
-    if "sub_saves" in pos_df.columns and scoring["save_per_3"] > 0:
-        # Continuous E[saves]/3 instead of floor (Fix 3)
-        pos_df["predicted_next_gw_points"] += (
-            pos_df["p_plays"] * (pos_df["sub_saves"] / 3) * scoring["save_per_3"]
-        )
-    if "sub_bonus" in pos_df.columns:
-        pos_df["predicted_next_gw_points"] += pos_df["p_plays"] * pos_df["sub_bonus"]
-
-    pos_df["predicted_next_gw_points"] = pos_df["predicted_next_gw_points"].clip(lower=0)
-
-    # DGW: sum per-fixture
-    if pos_df.duplicated(subset=["player_id"], keep=False).any():
-        agg_pred = pos_df.groupby("player_id")["predicted_next_gw_points"].sum()
-        meta_cols = [c for c in pos_df.columns
-                     if not c.startswith("sub_") and not c.startswith("pts_")
-                     and c != "predicted_next_gw_points"
-                     and c not in ("p_60plus", "p_plays")]
-        deduped = pos_df[meta_cols].drop_duplicates(subset=["player_id"], keep="first")
-        deduped = deduped.set_index("player_id")
-        deduped["predicted_next_gw_points"] = agg_pred
-        pos_df = deduped.reset_index()
-
-    return pos_df
-
 
 def predict_single_gw(
     df: pd.DataFrame, predict_gw: int, season: str, print_fn=print,
@@ -255,24 +180,44 @@ def predict_single_gw(
         ((df["season"] == season) & (df["gameweek"] < snapshot_gw))
     ].copy()
 
-    # Decomposed sub-model predictions
+    # Ensemble predictions: blend decomposed + mean (same as production)
+    pred_col = "predicted_next_gw_points"
     all_preds = []
     for pos in POSITION_GROUPS:
-        sub_models = _train_backtest_sub_models(train_df, pos)
+        pos_sub_models = _train_backtest_sub_models(train_df, pos)
         components = SUB_MODELS_FOR_POSITION.get(pos, [])
-        if sub_models and len(sub_models) == len(components):
-            preds = _predict_decomposed_backtest(snapshot, pos, sub_models)
+        decomp_preds = (
+            predict_decomposed(snapshot, pos, sub_models=pos_sub_models)
+            if pos_sub_models and len(pos_sub_models) == len(components)
+            else pd.DataFrame()
+        )
+        model_dict = _train_backtest_model(train_df, pos, "next_gw_points")
+        mean_preds = (
+            predict_for_position(snapshot, pos, "next_gw_points", model_dict)
+            if model_dict is not None else pd.DataFrame()
+        )
+
+        # Blend (matches _ensemble_predict_position in predict.py)
+        if not decomp_preds.empty and not mean_preds.empty:
+            w_d = ENSEMBLE_WEIGHT_DECOMPOSED
+            merged = decomp_preds[["player_id", pred_col]].merge(
+                mean_preds[["player_id", pred_col]],
+                on="player_id", suffixes=("_decomp", "_mean"),
+            )
+            merged[pred_col] = (
+                w_d * merged[f"{pred_col}_decomp"]
+                + (1 - w_d) * merged[f"{pred_col}_mean"]
+            )
+            preds = merged[["player_id", pred_col]]
+        elif not mean_preds.empty:
+            preds = mean_preds[["player_id", pred_col]]
+        elif not decomp_preds.empty:
+            preds = decomp_preds[["player_id", pred_col]]
         else:
-            model_dict = _train_backtest_model(train_df, pos, "next_gw_points")
-            if model_dict is None:
-                continue
-            preds = predict_for_position(
-                snapshot, pos, "next_gw_points", model_dict,
-            )
+            continue
+
         if not preds.empty:
-            all_preds.append(
-                preds[["player_id", "predicted_next_gw_points"]].copy()
-            )
+            all_preds.append(preds.copy())
 
     if not all_preds:
         return None
@@ -313,18 +258,22 @@ def _run_season_backtest(
     end_gw: int,
     season: str,
     print_fn=print,
-) -> list[dict]:
-    """Run walk-forward backtest for a single season, returning raw GW results.
+) -> tuple[list[dict], pd.DataFrame]:
+    """Run walk-forward backtest for a single season.
 
     For each gameweek in [start_gw, end_gw], trains a fresh model using
     only data up to the previous GW (no data leakage), then predicts the
     target GW.
+
+    Returns (gameweek_results, pooled_predictions) where pooled_predictions
+    is a concatenated DataFrame of per-GW prediction data for diagnostics.
     """
     season_df = df[df["season"] == season]
     available_gws = sorted(season_df["gameweek"].unique())
     season_year = int(season.split("-")[0])
 
     gameweek_results = []
+    all_gw_predictions = []  # Collect per-GW pred_df for diagnostics
 
     for predict_gw in range(start_gw, end_gw + 1):
         snapshot_gw = predict_gw - 1
@@ -357,25 +306,44 @@ def _run_season_backtest(
             ((df["season"] == season) & (df["gameweek"] < snapshot_gw))
         ].copy()
 
-        # --- Decomposed sub-model predictions ---
+        # --- Ensemble predictions: blend decomposed + mean (same as production) ---
+        pred_col = "predicted_next_gw_points"
         all_preds = []
         for pos in POSITION_GROUPS:
-            sub_models = _train_backtest_sub_models(train_df, pos)
+            pos_sub_models = _train_backtest_sub_models(train_df, pos)
             components = SUB_MODELS_FOR_POSITION.get(pos, [])
-            if sub_models and len(sub_models) == len(components):
-                preds = _predict_decomposed_backtest(snapshot, pos, sub_models)
+            decomp_preds = (
+                predict_decomposed(snapshot, pos, sub_models=pos_sub_models)
+                if pos_sub_models and len(pos_sub_models) == len(components)
+                else pd.DataFrame()
+            )
+            model_dict = _train_backtest_model(train_df, pos, "next_gw_points")
+            mean_preds = (
+                predict_for_position(snapshot, pos, "next_gw_points", model_dict)
+                if model_dict is not None else pd.DataFrame()
+            )
+
+            # Blend (matches _ensemble_predict_position in predict.py)
+            if not decomp_preds.empty and not mean_preds.empty:
+                w_d = ENSEMBLE_WEIGHT_DECOMPOSED
+                merged = decomp_preds[["player_id", pred_col]].merge(
+                    mean_preds[["player_id", pred_col]],
+                    on="player_id", suffixes=("_decomp", "_mean"),
+                )
+                merged[pred_col] = (
+                    w_d * merged[f"{pred_col}_decomp"]
+                    + (1 - w_d) * merged[f"{pred_col}_mean"]
+                )
+                preds = merged[["player_id", pred_col]]
+            elif not mean_preds.empty:
+                preds = mean_preds[["player_id", pred_col]]
+            elif not decomp_preds.empty:
+                preds = decomp_preds[["player_id", pred_col]]
             else:
-                # Fall back to single model
-                model_dict = _train_backtest_model(train_df, pos, "next_gw_points")
-                if model_dict is None:
-                    continue
-                preds = predict_for_position(
-                    snapshot, pos, "next_gw_points", model_dict,
-                )
+                continue
+
             if not preds.empty:
-                all_preds.append(
-                    preds[["player_id", "predicted_next_gw_points"]].copy()
-                )
+                all_preds.append(preds.copy())
 
         if not all_preds:
             continue
@@ -463,13 +431,28 @@ def _run_season_backtest(
         pred_df["position"] = pred_df["player_id"].map(pos_map)
 
         # Name info
+        deduped_snap = snapshot.drop_duplicates("player_id")
         name_map = dict(
-            zip(
-                snapshot.drop_duplicates("player_id")["player_id"],
-                snapshot.drop_duplicates("player_id").get("web_name", pd.Series()),
-            )
+            zip(deduped_snap["player_id"], deduped_snap.get("web_name", pd.Series()))
         )
         pred_df["web_name"] = pred_df["player_id"].map(name_map).fillna("?")
+
+        # Cost info (for diagnostics) — feature data uses 'cost' (in £m), raw API uses 'now_cost' (in 0.1m)
+        if "cost" in deduped_snap.columns:
+            cost_map = dict(zip(deduped_snap["player_id"], deduped_snap["cost"].fillna(0)))
+            pred_df["cost"] = pred_df["player_id"].map(cost_map).fillna(0)
+        elif "now_cost" in deduped_snap.columns:
+            cost_map = dict(zip(deduped_snap["player_id"], deduped_snap["now_cost"].fillna(0)))
+            pred_df["cost"] = pred_df["player_id"].map(cost_map).fillna(0) / 10.0
+        else:
+            pred_df["cost"] = 0.0
+
+        # FDR info (for diagnostics) — average FDR across fixtures for DGW
+        if "fdr" in snapshot.columns:
+            fdr_avg = snapshot.groupby("player_id")["fdr"].mean()
+            pred_df["fdr"] = pred_df["player_id"].map(fdr_avg).fillna(3.0)
+        else:
+            pred_df["fdr"] = 3.0
 
         # --- MAE ---
         model_mae = float(
@@ -596,6 +579,17 @@ def _run_season_backtest(
         }
 
         gameweek_results.append(gw_result)
+
+        # Collect raw prediction data for diagnostics
+        diag_df = pred_df[["player_id", "predicted_next_gw_points", "actual",
+                           "position", "web_name", "ep_next", "captain_score"]].copy()
+        diag_df["gw"] = predict_gw
+        if "cost" in pred_df.columns:
+            diag_df["cost"] = pred_df["cost"]
+        if "fdr" in pred_df.columns:
+            diag_df["fdr"] = pred_df["fdr"]
+        all_gw_predictions.append(diag_df)
+
         print_fn(
             f"  [{season}] GW{predict_gw:2d}: MAE m={model_mae:.2f} pl={model_mae_played:.2f} ep={ep_mae:.2f} f={form_mae:.2f} l3={last3_mae:.2f}"
             f" rho={spearman_rho:.2f}"
@@ -604,7 +598,319 @@ def _run_season_backtest(
             f" | {winner}"
         )
 
-    return gameweek_results
+    # Combine all per-GW predictions for diagnostics
+    pooled_predictions = pd.concat(all_gw_predictions, ignore_index=True) if all_gw_predictions else pd.DataFrame()
+
+    return gameweek_results, pooled_predictions
+
+
+def _compute_diagnostics(
+    pooled: pd.DataFrame, gameweek_results: list[dict],
+) -> dict:
+    """Compute diagnostic breakdowns from pooled per-GW predictions vs actuals.
+
+    Returns a dict with calibration, fixture difficulty, cost tier, haul/blank
+    detection, captain analysis, and biggest misses.
+    """
+    if pooled.empty:
+        return {}
+
+    pred_col = "predicted_next_gw_points"
+    diagnostics = {}
+
+    # --- 2A: Calibration analysis ---
+    bins = [(0, 1), (1, 2), (2, 3), (3, 4), (4, 5), (5, float("inf"))]
+    bin_labels = ["0-1", "1-2", "2-3", "3-4", "4-5", "5+"]
+    calibration = []
+    for (lo, hi), label in zip(bins, bin_labels):
+        mask = (pooled[pred_col] >= lo) & (pooled[pred_col] < hi)
+        subset = pooled[mask]
+        if len(subset) > 0:
+            calibration.append({
+                "bin": label,
+                "predicted_avg": round(float(subset[pred_col].mean()), 2),
+                "actual_avg": round(float(subset["actual"].mean()), 2),
+                "count": int(len(subset)),
+            })
+    diagnostics["calibration"] = calibration
+
+    # --- 2B: Fixture difficulty breakdown ---
+    if "fdr" in pooled.columns:
+        by_difficulty = {}
+        for label, lo, hi in [("easy", 0, 2.5), ("medium", 2.5, 3.5), ("hard", 3.5, 6)]:
+            mask = (pooled["fdr"] >= lo) & (pooled["fdr"] < hi)
+            subset = pooled[mask]
+            if len(subset) > 0:
+                by_difficulty[label] = {
+                    "mae": round(float(np.abs(subset[pred_col] - subset["actual"]).mean()), 3),
+                    "avg_predicted": round(float(subset[pred_col].mean()), 2),
+                    "avg_actual": round(float(subset["actual"].mean()), 2),
+                    "count": int(len(subset)),
+                }
+        diagnostics["by_difficulty"] = by_difficulty
+
+    # --- 2C: Player cost tier breakdown ---
+    if "cost" in pooled.columns:
+        by_cost_tier = {}
+        for label, lo, hi in [("budget", 0, 5.0), ("mid_range", 5.0, 8.0), ("premium", 8.0, 100.0)]:
+            mask = (pooled["cost"] >= lo) & (pooled["cost"] < hi)
+            subset = pooled[mask]
+            if len(subset) > 0:
+                mae = float(np.abs(subset[pred_col] - subset["actual"]).mean())
+                _sp = spearmanr(subset["actual"], subset[pred_col]).correlation
+                by_cost_tier[label] = {
+                    "mae": round(mae, 3),
+                    "spearman": round(float(_sp) if not np.isnan(_sp) else 0.0, 3),
+                    "count": int(len(subset)),
+                }
+        diagnostics["by_cost_tier"] = by_cost_tier
+
+    # --- 2D: Haul and blank detection ---
+    haul_threshold = 8
+    blank_threshold = 1
+    hauls = pooled[pooled["actual"] >= haul_threshold]
+    blanks = pooled[pooled["actual"] <= blank_threshold]
+
+    haul_detection = {"total_hauls": int(len(hauls))}
+
+    # Per-GW top-20 analysis
+    hauls_in_model_top20 = 0
+    hauls_in_ep_top20 = 0
+    model_false_positives = 0  # Model top-20 who blanked
+    model_top20_total = 0
+
+    for gw in pooled["gw"].unique():
+        gw_df = pooled[pooled["gw"] == gw]
+        model_top20 = set(gw_df.nlargest(20, pred_col)["player_id"])
+        gw_hauls = set(gw_df[gw_df["actual"] >= haul_threshold]["player_id"])
+        gw_blanks = set(gw_df[gw_df["actual"] <= blank_threshold]["player_id"])
+
+        hauls_in_model_top20 += len(model_top20 & gw_hauls)
+        model_false_positives += len(model_top20 & gw_blanks)
+        model_top20_total += len(model_top20)
+
+        if "ep_next" in gw_df.columns:
+            ep_top20 = set(gw_df.nlargest(20, "ep_next")["player_id"])
+            hauls_in_ep_top20 += len(ep_top20 & gw_hauls)
+
+    haul_detection["hauls_in_model_top20"] = hauls_in_model_top20
+    haul_detection["haul_capture_rate"] = (
+        round(hauls_in_model_top20 / len(hauls), 3)
+        if len(hauls) > 0 else 0
+    )
+    haul_detection["hauls_in_ep_top20"] = hauls_in_ep_top20
+    haul_detection["avg_predicted_for_hauls"] = (
+        round(float(hauls[pred_col].mean()), 2)
+        if len(hauls) > 0 else 0
+    )
+    haul_detection["avg_predicted_for_blanks"] = (
+        round(float(blanks[pred_col].mean()), 2)
+        if len(blanks) > 0 else 0
+    )
+    haul_detection["false_positive_rate"] = (
+        round(model_false_positives / model_top20_total, 3)
+        if model_top20_total > 0 else 0
+    )
+    diagnostics["haul_detection"] = haul_detection
+
+    # --- 2E: Captain analysis (detailed) ---
+    captain_analysis = {}
+    captain_pts_list = []
+    best_captain_pts_list = []
+    ep_captain_pts_list = []
+    captain_in_top3_count = 0
+    captain_in_top10_count = 0
+    worst_captain_gws = []
+
+    for gw_result in gameweek_results:
+        gw = gw_result["gw"]
+        gw_df = pooled[pooled["gw"] == gw]
+        if gw_df.empty:
+            continue
+
+        # Model captain pick (highest captain_score)
+        captain_row = gw_df.nlargest(1, "captain_score").iloc[0]
+        captain_actual = float(captain_row["actual"])
+        captain_pts_list.append(captain_actual)
+
+        # Best possible captain
+        best_row = gw_df.nlargest(1, "actual").iloc[0]
+        best_captain_pts_list.append(float(best_row["actual"]))
+
+        # ep_next captain
+        if "ep_next" in gw_df.columns:
+            ep_captain_row = gw_df.nlargest(1, "ep_next").iloc[0]
+            ep_captain_pts_list.append(float(ep_captain_row["actual"]))
+
+        # Top-N checks
+        actual_sorted = gw_df.nlargest(10, "actual")
+        top3_ids = set(actual_sorted.head(3)["player_id"])
+        top10_ids = set(actual_sorted["player_id"])
+        if captain_row["player_id"] in top3_ids:
+            captain_in_top3_count += 1
+        if captain_row["player_id"] in top10_ids:
+            captain_in_top10_count += 1
+
+        # Track worst captain GWs
+        worst_captain_gws.append({
+            "gw": gw,
+            "captain": str(captain_row.get("web_name", "?")),
+            "pts": round(captain_actual, 1),
+            "best": str(best_row.get("web_name", "?")),
+            "best_pts": round(float(best_row["actual"]), 1),
+        })
+
+    n_gws = len(captain_pts_list)
+    if n_gws > 0:
+        captain_analysis["avg_captain_pts"] = round(float(np.mean(captain_pts_list)), 1)
+        captain_analysis["avg_best_captain_pts"] = round(float(np.mean(best_captain_pts_list)), 1)
+        captain_analysis["captain_pts_lost"] = round(
+            float(np.mean(best_captain_pts_list)) - float(np.mean(captain_pts_list)), 1
+        )
+        if ep_captain_pts_list:
+            captain_analysis["ep_avg_captain_pts"] = round(float(np.mean(ep_captain_pts_list)), 1)
+        captain_analysis["captain_in_top3_pct"] = round(captain_in_top3_count / n_gws * 100, 0)
+        captain_analysis["captain_in_top10_pct"] = round(captain_in_top10_count / n_gws * 100, 0)
+
+        # Worst 5 captain GWs by points lost
+        worst_captain_gws.sort(key=lambda x: x["best_pts"] - x["pts"], reverse=True)
+        captain_analysis["worst_captain_gws"] = worst_captain_gws[:5]
+
+    diagnostics["captain_analysis"] = captain_analysis
+
+    # --- 2F: Biggest misses ---
+    # Work on a copy to avoid mutating the caller's DataFrame
+    errors_df = pooled[["web_name", "gw", pred_col, "actual"]].copy()
+    errors_df["error"] = errors_df[pred_col] - errors_df["actual"]
+
+    # Overpredicted: high prediction, low actual (positive error)
+    overpredicted = (
+        errors_df[errors_df["error"] > 0]
+        .nlargest(10, "error")
+        .rename(columns={pred_col: "predicted"})
+    )
+    overpredicted["error"] = overpredicted["error"].round(1)
+    overpredicted["predicted"] = overpredicted["predicted"].round(1)
+
+    # Underpredicted: low prediction, high actual (negative error)
+    underpredicted = (
+        errors_df[errors_df["error"] < 0]
+        .nsmallest(10, "error")
+        .rename(columns={pred_col: "predicted"})
+    )
+    underpredicted["error"] = underpredicted["error"].abs().round(1)
+    underpredicted["predicted"] = underpredicted["predicted"].round(1)
+
+    diagnostics["biggest_misses"] = {
+        "overpredicted": overpredicted[["web_name", "gw", "predicted", "actual", "error"]].to_dict("records"),
+        "underpredicted": underpredicted[["web_name", "gw", "predicted", "actual", "error"]].to_dict("records"),
+    }
+
+    return diagnostics
+
+
+def _compute_3gw_backtest(
+    pooled: pd.DataFrame, print_fn=print,
+) -> dict:
+    """Compute 3-GW backtest metrics from pooled per-GW predictions.
+
+    For each GW where we have predictions for GW, GW+1, GW+2:
+    - Sum predicted 1-GW points across the 3-GW window (with 0.95 decay)
+    - Sum actual points across the 3-GW window
+    - Compare predicted vs actual 3-GW totals
+
+    Returns dict with MAE_3gw, Spearman_3gw, and per-window results.
+    """
+    if pooled.empty:
+        return {}
+
+    pred_col = "predicted_next_gw_points"
+    gws = sorted(pooled["gw"].unique())
+
+    if len(gws) < 3:
+        return {}
+
+    window_results = []
+
+    for i, start_gw in enumerate(gws):
+        window_gws = [start_gw, start_gw + 1, start_gw + 2]
+        # Check all 3 GWs have predictions
+        if not all(g in gws for g in window_gws):
+            continue
+
+        # Collect per-GW data for this window
+        # Note: each GW's prediction was made independently (fresh model trained
+        # up to that GW), so no confidence decay is applied here.  Production's
+        # 3-GW sum uses decay because it projects from a single snapshot, but
+        # the backtest already has the best possible 1-GW prediction for each GW.
+        gw_dfs = []
+        for offset, gw in enumerate(window_gws):
+            gw_df = pooled[pooled["gw"] == gw][["player_id", pred_col, "actual"]].copy()
+            gw_df = gw_df.rename(columns={
+                pred_col: f"pred_{gw}",
+                "actual": f"actual_{gw}",
+            })
+            gw_dfs.append(gw_df)
+
+        # Merge — only keep players with data in all 3 GWs
+        merged = gw_dfs[0]
+        for extra in gw_dfs[1:]:
+            merged = merged.merge(extra, on="player_id", how="inner")
+
+        if len(merged) < 20:
+            continue
+
+        pred_3gw_cols = [c for c in merged.columns if c.startswith("pred_")]
+        actual_3gw_cols = [c for c in merged.columns if c.startswith("actual_")]
+
+        merged["pred_3gw"] = merged[pred_3gw_cols].sum(axis=1)
+        merged["actual_3gw"] = merged[actual_3gw_cols].sum(axis=1)
+
+        mae_3gw = float(np.abs(merged["pred_3gw"] - merged["actual_3gw"]).mean())
+        _sp = spearmanr(merged["actual_3gw"], merged["pred_3gw"]).correlation
+        spearman_3gw = float(_sp) if not np.isnan(_sp) else 0.0
+
+        # Top-11 transfer target accuracy
+        model_top11 = merged.nlargest(11, "pred_3gw")
+        actual_top11 = merged.nlargest(11, "actual_3gw")
+        model_top11_pts = float(model_top11["actual_3gw"].sum())
+        actual_best_pts = float(actual_top11["actual_3gw"].sum())
+        overlap = int(len(set(model_top11["player_id"]) & set(actual_top11["player_id"])))
+
+        window_results.append({
+            "start_gw": int(start_gw),
+            "end_gw": int(start_gw + 2),
+            "n_players": int(len(merged)),
+            "mae_3gw": round(mae_3gw, 3),
+            "spearman_3gw": round(spearman_3gw, 3),
+            "model_top11_pts": round(model_top11_pts, 1),
+            "actual_best_pts": round(actual_best_pts, 1),
+            "top11_overlap": overlap,
+        })
+
+    if not window_results:
+        return {}
+
+    avg_mae = round(np.mean([r["mae_3gw"] for r in window_results]), 3)
+    avg_spearman = round(np.mean([r["spearman_3gw"] for r in window_results]), 3)
+    avg_top11_pts = round(np.mean([r["model_top11_pts"] for r in window_results]), 1)
+    avg_actual_best = round(np.mean([r["actual_best_pts"] for r in window_results]), 1)
+    capture_pct = round((avg_top11_pts / avg_actual_best) * 100, 1) if avg_actual_best > 0 else 0
+
+    print_fn(f"\n  === 3-GW Backtest ({len(window_results)} windows) ===")
+    print_fn(f"  Avg MAE (3-GW): {avg_mae}")
+    print_fn(f"  Avg Spearman (3-GW): {avg_spearman}")
+    print_fn(f"  Avg Top-11 pts: {avg_top11_pts} / {avg_actual_best} ({capture_pct}%)")
+
+    return {
+        "n_windows": len(window_results),
+        "avg_mae_3gw": avg_mae,
+        "avg_spearman_3gw": avg_spearman,
+        "avg_model_top11_pts": avg_top11_pts,
+        "avg_actual_best_pts": avg_actual_best,
+        "capture_pct_3gw": capture_pct,
+        "windows": window_results,
+    }
 
 
 def run_backtest(
@@ -638,13 +944,18 @@ def run_backtest(
 
     # Collect gameweek results across all seasons
     gameweek_results = []
+    all_pooled = []
     for s in season_list:
         print_fn(f"\n  --- Season {s} ---")
-        gw_results = _run_season_backtest(df, start_gw, end_gw, s, print_fn)
+        gw_results, pooled = _run_season_backtest(df, start_gw, end_gw, s, print_fn)
         gameweek_results.extend(gw_results)
+        if not pooled.empty:
+            all_pooled.append(pooled)
 
     if not gameweek_results:
         return {"error": "No gameweeks available for backtest."}
+
+    pooled_predictions = pd.concat(all_pooled, ignore_index=True) if all_pooled else pd.DataFrame()
 
     # --- Aggregate summary ---
     n_gws = len(gameweek_results)
@@ -796,8 +1107,35 @@ def run_backtest(
     spear_p_str = f"{spear_pvalue:.4f}" if not np.isnan(spear_pvalue) else "n/a"
     print_fn(f"  Significance — MAE p={mae_p_str}, Spearman p={spear_p_str} (Wilcoxon signed-rank, one-sided)")
 
-    return {
+    # --- 3-GW Backtest ---
+    backtest_3gw = _compute_3gw_backtest(pooled_predictions, print_fn)
+
+    # --- Diagnostics ---
+    diagnostics = _compute_diagnostics(pooled_predictions, gameweek_results)
+    if diagnostics:
+        # Print diagnostic highlights
+        if "calibration" in diagnostics:
+            print_fn(f"\n  === Diagnostics ===")
+            cal = diagnostics["calibration"]
+            print_fn(f"  Calibration ({len(cal)} bins):")
+            for b in cal:
+                delta = b["actual_avg"] - b["predicted_avg"]
+                direction = "under" if delta > 0.1 else "over" if delta < -0.1 else "ok"
+                print_fn(f"    {b['bin']:5s}: pred={b['predicted_avg']:.2f} actual={b['actual_avg']:.2f} ({direction}, n={b['count']})")
+        if "haul_detection" in diagnostics:
+            hd = diagnostics["haul_detection"]
+            print_fn(f"  Haul detection: {hd['hauls_in_model_top20']}/{hd['total_hauls']} hauls in model top-20 ({hd['haul_capture_rate']:.1%})")
+        if "captain_analysis" in diagnostics and diagnostics["captain_analysis"]:
+            ca = diagnostics["captain_analysis"]
+            print_fn(f"  Captain: avg {ca.get('avg_captain_pts', 0):.1f} pts (best possible: {ca.get('avg_best_captain_pts', 0):.1f}, lost: {ca.get('captain_pts_lost', 0):.1f})")
+
+    result = {
         "summary": summary,
         "by_position": pos_summary,
         "gameweeks": gameweek_results,
+        "diagnostics": _json_safe(diagnostics),
     }
+    if backtest_3gw:
+        result["backtest_3gw"] = _json_safe(backtest_3gw)
+
+    return result

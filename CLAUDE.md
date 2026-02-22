@@ -528,7 +528,7 @@ Write a standalone Python script (in `/private/tmp/`) that tests each specific c
 
 This is the definitive test. It retrains models from scratch for each GW — no cached model contamination.
 
-**IMPORTANT**: The backtest has its own copy of decomposed prediction logic in `_predict_decomposed_backtest()` (`src/backtest.py`). Any changes to `predict_decomposed()` in `model.py` must be mirrored there, or the backtest won't test the fix.
+The backtest now uses `predict_decomposed()` from `model.py` directly (with in-memory models via the `sub_models` parameter), so it automatically includes DefCon scoring, soft calibration caps, and the 85/15 ensemble blend. No need to mirror changes.
 
 **Protocol**:
 1. `git stash` your changes
@@ -552,6 +552,25 @@ This is the definitive test. It retrains models from scratch for each GW — no 
 | `model_wins` vs `ep_wins` | Head-to-head vs FPL's ep_next | More wins | Medium |
 | `captain_hit_rate` | Captain in top-3 scorers | Higher | Medium |
 | `mae_pvalue` | Statistical significance of MAE improvement | Lower | Validation |
+
+**Diagnostic metrics** (in `diagnostics` key — use to identify improvement opportunities):
+
+| Metric | What it answers |
+|--------|----------------|
+| `calibration` | Is the model well-calibrated? (predicted_avg ≈ actual_avg per bin) |
+| `by_difficulty` | Does the model struggle with hard/easy fixtures? |
+| `by_cost_tier` | Are premium players predicted differently than budget? |
+| `haul_detection` | How many 8+ pt hauls does the model's top-20 capture? |
+| `captain_analysis` | Points lost per GW from suboptimal captain picks |
+| `biggest_misses` | Which players/GWs had the largest prediction errors? |
+
+**3-GW metrics** (in `backtest_3gw` key — validates transfer target accuracy):
+
+| Metric | What it measures | Direction |
+|--------|-----------------|-----------|
+| `avg_mae_3gw` | 3-GW rolling prediction accuracy | Lower |
+| `avg_spearman_3gw` | 3-GW ranking quality | Higher |
+| `capture_pct_3gw` | % of best possible 3-GW top-11 | Higher |
 
 **Pass criteria**:
 - `model_avg_mae` must not increase (same or lower)
@@ -593,30 +612,74 @@ for p in doubt[:5]:
 # Run backtest (GW10-27 current season)
 curl -s -X POST http://127.0.0.1:9875/api/backtest -H 'Content-Type: application/json' -d '{"start_gw":10,"end_gw":27}'
 
-# Fetch results
+# Fetch results (summary + diagnostics + 3-GW)
 curl -s http://127.0.0.1:9875/api/backtest-results | python3 -c "
-import sys,json; s=json.load(sys.stdin)['summary']
+import sys,json; r=json.load(sys.stdin); s=r['summary']
 print(f'MAE={s[\"model_avg_mae\"]:.4f} rho={s[\"avg_spearman\"]:.4f} top11={s[\"model_avg_top11_pts\"]:.1f} cap%={s[\"model_capture_pct\"]:.1f}%')
-print(f'vs ep: {s[\"model_wins\"]}W-{s[\"ep_wins\"]}L | MAE p={s.get(\"mae_pvalue\",\"?\")}')"
+print(f'vs ep: {s[\"model_wins\"]}W-{s[\"ep_wins\"]}L | MAE p={s.get(\"mae_pvalue\",\"?\")}')
+if 'backtest_3gw' in r:
+    t=r['backtest_3gw']
+    print(f'3-GW: MAE={t[\"avg_mae_3gw\"]:.4f} rho={t[\"avg_spearman_3gw\"]:.4f} cap%={t[\"capture_pct_3gw\"]:.1f}%')
+if 'diagnostics' in r:
+    d=r['diagnostics']
+    if 'haul_detection' in d:
+        h=d['haul_detection']
+        print(f'Haul capture: {h[\"hauls_in_model_top20\"]}/{h[\"total_hauls\"]} ({h[\"haul_capture_rate\"]:.1%})')
+    if 'captain_analysis' in d and d['captain_analysis']:
+        c=d['captain_analysis']
+        print(f'Captain: avg {c.get(\"avg_captain_pts\",0):.1f} pts, lost {c.get(\"captain_pts_lost\",0):.1f} vs best')"
+
+# Fetch diagnostics only
+curl -s http://127.0.0.1:9875/api/backtest-results | python3 -c "
+import sys,json; d=json.load(sys.stdin).get('diagnostics',{})
+if 'calibration' in d:
+    print('Calibration:')
+    for b in d['calibration']:
+        print(f'  {b[\"bin\"]:5s}: pred={b[\"predicted_avg\"]:.2f} actual={b[\"actual_avg\"]:.2f} (n={b[\"count\"]})')
+if 'by_difficulty' in d:
+    print('By fixture difficulty:')
+    for k,v in d['by_difficulty'].items():
+        print(f'  {k:6s}: MAE={v[\"mae\"]:.3f} pred={v[\"avg_predicted\"]:.2f} actual={v[\"avg_actual\"]:.2f}')
+if 'biggest_misses' in d:
+    print('Biggest underpredictions:')
+    for m in d['biggest_misses']['underpredicted'][:5]:
+        print(f'  GW{m[\"gw\"]} {m[\"web_name\"]}: pred={m[\"predicted\"]:.1f} actual={m[\"actual\"]:.0f}')"
 
 # Multi-season backtest (more data, slower)
 curl -s -X POST http://127.0.0.1:9875/api/backtest -H 'Content-Type: application/json' -d '{"start_gw":10,"end_gw":27,"seasons":["2024-2025","2025-2026"]}'
 ```
 
-### Current Baseline (2025-02-22, post-methodology-fixes)
+### Current Baseline (2026-02-22, post-backtest-overhaul)
+
+Backtest now uses production code path (ensemble blend, DefCon, soft calibration caps).
 
 | Metric | Value |
 |--------|-------|
-| Model MAE | 1.0640 |
-| Model MAE (played) | 2.1360 |
-| Spearman rho | 0.6680 |
-| NDCG@20 | 0.4610 |
-| Top-11 pts | 54.60 |
-| Capture % | 40.0% |
-| Win rate vs ep | 11W-5L-2T |
-| MAE p-value | 0.0000 |
+| Model MAE | 1.1530 |
+| Model MAE (played) | 2.0370 |
+| Spearman rho | 0.7200 |
+| NDCG@20 | 0.4330 |
+| Top-11 pts | 49.50 |
+| Capture % | 36.2% |
+| Win rate vs ep | 11W-7L-0T |
+| MAE p-value | 0.0008 |
+| Captain hit rate | 6% |
 
-Per-position MAE: GKP=0.781, DEF=1.246, MID=0.997, FWD=1.053
+Per-position MAE: GKP=0.833, DEF=1.343, MID=1.077, FWD=1.183
+
+3-GW: MAE=2.228, Spearman=0.859, Capture=60.3%
+
+**Previous baseline** (pre-overhaul, stale decomposed copy without DefCon/soft caps/blend): MAE=1.064, Spearman=0.668, Top-11=54.6, Capture=40.0%. The lower MAE was inflated by the stale decomposed path producing different predictions than production.
+
+#### Diagnostic Insights
+
+| Finding | Detail | Opportunity |
+|---------|--------|-------------|
+| Overprediction at 5+ pts | pred=5.95 vs actual=4.24 (delta=-1.71) | Soft caps may need tightening, or high-end predictions need dampening |
+| Premium player MAE | 2.558 (vs 0.822 budget) | Premium players are hardest to predict — more variance |
+| Haul capture rate | 13.5% (68/503 hauls in model top-20) | Model identifies hauls slightly better than ep (59/503) |
+| Captain points lost | 10.5 pts/GW vs best possible | Captain selection is the biggest single improvement area |
+| Calibration sweet spot | 0-3 pts: well calibrated (±0.14) | Focus improvement on 4+ pt predictions |
 
 ---
 

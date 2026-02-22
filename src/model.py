@@ -919,11 +919,16 @@ def load_sub_model(position: str, component: str) -> dict | None:
 
 def predict_decomposed(
     df: pd.DataFrame, position: str,
+    sub_models: dict[str, dict] | None = None,
 ) -> pd.DataFrame:
     """Generate decomposed predictions for a position and combine using FPL rules.
 
     Loads each sub-model, predicts per-component expected values, then applies
     FPL scoring multipliers to produce a total predicted_next_gw_points.
+
+    When sub_models is provided (dict mapping component name -> model_dict),
+    uses those directly instead of loading from disk.  This allows the backtest
+    to pass in freshly-trained in-memory models.
 
     Handles DGW players the same way as predict_for_position: each fixture row
     gets predicted independently, then summed per player.
@@ -937,15 +942,17 @@ def predict_decomposed(
     if pos_df.empty:
         return pd.DataFrame()
 
-    # Predict each component
+    # Load sub-models from disk if not provided
     component_preds = {}
-    loaded_models = {}  # cache to avoid double disk loads
-    for comp in components:
-        model_dict = load_sub_model(position, comp)
-        if model_dict is None:
-            continue
-        loaded_models[comp] = model_dict
+    if sub_models is None:
+        sub_models = {}
+        for comp in components:
+            model_dict = load_sub_model(position, comp)
+            if model_dict is not None:
+                sub_models[comp] = model_dict
 
+    # Predict each component
+    for comp, model_dict in sub_models.items():
         model = model_dict["model"]
         features = model_dict["features"]
         available = [c for c in features if c in pos_df.columns]
@@ -983,12 +990,10 @@ def predict_decomposed(
         np.where(cop < 1.0, cop, avail), index=pos_df.index
     ).clip(0, 1)
     # Per-player P(60+ | plays) from minutes history instead of blanket 0.85.
-    # avg_mins_per_appearance / 90 gives ~1.0 for full-game starters, ~0.33 for
-    # super-subs, improving CS and appearance point estimates.
-    if "player_minutes_played_last5" in pos_df.columns and "availability_rate_last5" in pos_df.columns:
-        _games = (pos_df["availability_rate_last5"].fillna(0.75) * 5).clip(lower=0.5)
-        _avg_mins = pos_df["player_minutes_played_last5"].fillna(0) / _games
-        _p60_rate = (_avg_mins / 90.0).clip(0.1, 0.99)
+    # player_minutes_played_last5 is already a rolling MEAN of per-GW minutes,
+    # so dividing by 90 gives ~1.0 for full-game starters, ~0.33 for super-subs.
+    if "player_minutes_played_last5" in pos_df.columns:
+        _p60_rate = (pos_df["player_minutes_played_last5"].fillna(0) / 90.0).clip(0.1, 0.99)
         pos_df["p_60plus"] = pos_df["p_plays"] * _p60_rate
     else:
         pos_df["p_60plus"] = pos_df["p_plays"] * 0.85
