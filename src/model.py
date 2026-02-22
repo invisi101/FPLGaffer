@@ -565,10 +565,11 @@ def train_quantile_model(
     pos_df = pos_df.sort_values("_seq_gw")
 
     # Walk-forward validation
+    # Use the LAST 20 splits (most recent GWs) — same as mean model
     maes = []
     calibration_vals = []
-    n_splits = 0
-    for train_mask, test_mask in _walk_forward_splits(pos_df):
+    all_splits = list(_walk_forward_splits(pos_df))
+    for train_mask, test_mask in all_splits[-20:]:
         X_train = pos_df.loc[train_mask, available_feats].values
         y_train = pos_df.loc[train_mask, target].values
         w_train = pos_df.loc[train_mask, "_sample_weight"].values
@@ -586,13 +587,10 @@ def train_quantile_model(
         maes.append(mean_absolute_error(y_test, preds))
         # Calibration: fraction of actuals below quantile prediction
         calibration_vals.append(float((y_test <= preds).mean()))
-        n_splits += 1
-        if n_splits >= 20:
-            break
 
     walk_forward_mae = np.mean(maes) if maes else float("nan")
     avg_calibration = np.mean(calibration_vals) if calibration_vals else float("nan")
-    print(f"    Walk-forward MAE: {walk_forward_mae:.3f} (over {n_splits} splits)")
+    print(f"    Walk-forward MAE: {walk_forward_mae:.3f} (over {len(maes)} splits)")
     print(f"    Calibration: {avg_calibration:.1%} of actuals below q{int(quantile_alpha*100)} prediction (target: {quantile_alpha:.0%})")
 
     # Train final model on all data (pos_df already sorted with _seq_gw)

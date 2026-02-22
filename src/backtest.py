@@ -19,6 +19,8 @@ def _json_safe(obj):
         return int(obj)
     if isinstance(obj, (np.floating,)):
         return float(obj)
+    if isinstance(obj, np.bool_):
+        return bool(obj)
     if isinstance(obj, np.ndarray):
         return obj.tolist()
     return obj
@@ -37,8 +39,7 @@ from src.model import (
     predict_decomposed,
     predict_for_position,
 )
-
-ENSEMBLE_WEIGHT_DECOMPOSED = 0.15
+from src.predict import ENSEMBLE_WEIGHT_DECOMPOSED
 
 
 def _bootstrap_ci(values, n_boot=10000, ci=0.95):
@@ -112,6 +113,9 @@ def _train_backtest_sub_models(
     models = {}
     for comp in components:
         target = SUB_MODEL_COMPONENTS[comp]
+        # Mirror model.py's train_sub_model() override for MID/FWD DefCon
+        if comp == "defcon" and position in ("MID", "FWD"):
+            target = "next_gw_cbirt"
         feature_cols = SUB_MODEL_FEATURES.get(comp, [])
         pos_df, available_feats = _prepare_position_data(
             train_df, position, target, feature_cols,

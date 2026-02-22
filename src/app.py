@@ -332,7 +332,7 @@ def api_refresh_data():
             print("\nRegenerating predictions with fresh data...")
             preds = run_predictions(df, data=data)
             if not preds.empty:
-                result = format_predictions(preds, df)
+                result = format_predictions(preds, df, data=data)
                 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
                 result.to_csv(OUTPUT_DIR / "predictions.csv", index=False, encoding="utf-8")
                 save_prediction_details(result, data=data)
@@ -417,7 +417,7 @@ def api_train():
         data = _pipeline_cache.get("data")
         preds = run_predictions(df, data=data)
         if not preds.empty:
-            result = format_predictions(preds, df)
+            result = format_predictions(preds, df, data=data)
             OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
             result.to_csv(OUTPUT_DIR / "predictions.csv", index=False, encoding="utf-8")
             save_prediction_details(result, data=data)

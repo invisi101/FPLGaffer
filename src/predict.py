@@ -229,7 +229,7 @@ def _ensemble_predict_position(
     snapshot: pd.DataFrame, position: str,
     decomp_cache: dict | None = None,
 ) -> pd.DataFrame:
-    """Predict for a position using the 50/50 ensemble blend.
+    """Predict for a position using the 85/15 mean/decomposed ensemble blend.
 
     Blends decomposed sub-models with mean regression when both available.
     Falls back to whichever exists alone.  Returns DataFrame with at least
@@ -261,13 +261,20 @@ def _ensemble_predict_position(
         merged = decomp_preds[["player_id", pred_col]].merge(
             mean_preds[["player_id", pred_col]],
             on="player_id", suffixes=("_decomp", "_mean"),
+            how="outer",
         )
-        merged[pred_col] = (
-            w_d * merged[f"{pred_col}_decomp"]
-            + w_m * merged[f"{pred_col}_mean"]
+        # When a player exists in only one model, fall back to that model's prediction
+        d_col = f"{pred_col}_decomp"
+        m_col = f"{pred_col}_mean"
+        merged[pred_col] = np.where(
+            merged[d_col].notna() & merged[m_col].notna(),
+            w_d * merged[d_col] + w_m * merged[m_col],
+            merged[m_col].fillna(merged[d_col]),
         )
         meta_cols = [c for c in decomp_preds.columns if c != pred_col]
-        return decomp_preds[meta_cols].merge(merged[["player_id", pred_col]], on="player_id")
+        return decomp_preds[meta_cols].merge(
+            merged[["player_id", pred_col]], on="player_id", how="outer"
+        )
     elif not decomp_preds.empty:
         return decomp_preds
     elif not mean_preds.empty:
@@ -545,7 +552,7 @@ def run_predictions(df: pd.DataFrame, data: dict | None = None) -> pd.DataFrame:
     print(f"Players in current GW: {len(unique_players)} ({dgw_count} with double GW)")
 
     # --- 1-GW predictions (next_gw_points) ---
-    # Ensemble: blend decomposed sub-models with mean regression model (50/50)
+    # Ensemble: blend mean regression (85%) with decomposed sub-models (15%)
     # when both are available. Fall back to whichever exists alone.
     all_preds = []
     _decomp_cache: dict[str, pd.DataFrame] = {}
@@ -768,9 +775,9 @@ def save_prediction_details(result: pd.DataFrame, data: dict | None = None) -> N
     print(f"  Prediction details saved to {detail_path} ({len(detail)} players)")
 
 
-def format_predictions(preds: pd.DataFrame, df: pd.DataFrame) -> pd.DataFrame:
+def format_predictions(preds: pd.DataFrame, df: pd.DataFrame, *, data: dict | None = None) -> pd.DataFrame:
     """Add player metadata and format the output table."""
-    latest_gw = get_latest_gw(df)
+    latest_gw = get_latest_gw(df, data=data)
     current = df[(df["season"] == CURRENT_SEASON) & (df["gameweek"] == latest_gw)]
 
     # Get player info — deduplicate
@@ -924,7 +931,7 @@ def main():
         sys.exit(1)
 
     # 6. Format and display
-    result = format_predictions(preds, df)
+    result = format_predictions(preds, df, data=data)
     print_predictions(result, top_n=args.top)
 
     # Save to CSV
