@@ -240,7 +240,7 @@ def _prepare_position_data(df: pd.DataFrame, position: str, target: str, feature
     pos_df = pos_df.dropna(subset=available_feats, thresh=(len(available_feats) + 1) // 2)
     # Use semantically correct defaults for features where 0 is misleading
     _fill_defaults = {"opponent_elo": 1500.0, "fdr": 3.0, "avg_fdr_next3": 3.0,
-                      "avg_opponent_elo_next3": 1500.0}
+                      "avg_opponent_elo_next3": 1500.0, "home_pct_next3": 0.5}
     for c in available_feats:
         pos_df[c] = pos_df[c].fillna(_fill_defaults.get(c, 0))
 
